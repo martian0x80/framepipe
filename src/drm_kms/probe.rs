@@ -1,6 +1,7 @@
 use drm::control::{connector, Device as ControlDevice, PlaneType};
 use drm::ClientCapability::{UniversalPlanes, Atomic};
 use drm::Device as BasicDevice;
+use drm::CLOEXEC;
 use std::fs::File;
 use std::collections::BinaryHeap;
 
@@ -140,6 +141,22 @@ fn get_matching_plane_from_connector(card: &Card, connector: &connector::Info) -
     Ok(planes)
 }
 
+fn get_primary_plane(card: &Card, planes: &[drm::control::plane::Info]) -> Result<drm::control::plane::Info, ProbeError> {
+    for plane in planes {
+        let properties = card.get_properties(plane.handle()).map_err(|_| ProbeError::GetPlaneProperties)?;
+        for (id, value) in properties.iter() {
+            let prop = card.get_property(*id).map_err(|_| ProbeError::Unknown)?;
+            let name = prop.name().to_str().unwrap_or("Invalid UTF-8");
+            if name == "type" && *value == PlaneType::Primary as u64 {
+                log::debug!("Primary plane found: {:?}", plane);
+                return Ok(plane.clone());
+            }
+        }
+    }
+    log::warn!("No primary plane found among matching planes");
+    Err(ProbeError::NoMatchingPlanesForConnector)
+}
+
 pub fn probe() -> Result<(), ProbeError> {
 
     get_dri_cards()?;
@@ -158,23 +175,47 @@ pub fn probe() -> Result<(), ProbeError> {
     // let mut primary_plane = None;
 
     for connector in connected_connectors {
-        let plane_info = get_matching_plane_from_connector(&card, &connector)?;
-        for plane in &plane_info {
+        let planes = get_matching_plane_from_connector(&card, &connector)?;
+        for plane in &planes {
             log::debug!("Matching plane for connector {} -> {:?}", connector, plane);
             log::info!("Found matching plane for connector {} -> {}", connector, plane);
         }
-        let best_plane = plane_info.first().ok_or(ProbeError::NoMatchingPlanesForConnector)?;
-        let best_plane_id = best_plane.handle();
-        let properties = card.get_properties(best_plane_id).map_err(|_| ProbeError::GetPlaneProperties)?;
-        log::debug!("Plane properties ->");
-        for (id, value) in properties.iter() {
-            let prop = card.get_property(*id).map_err(|_| ProbeError::Unknown)?;
-            let name = prop.name().to_str().unwrap_or("Invalid UTF-8");
-            if name == "type" {
-                log::debug!("\t{} = {:?}", name, *value == PlaneType::Primary as u64);
-            } else {
-                log::debug!("\t{} = {:?}", name, value);
+        {
+            // Just for debugging - print out all the properties of the first matching plane for this connector
+            let best_plane = planes.first().ok_or(ProbeError::NoMatchingPlanesForConnector)?;
+            let best_plane_id = best_plane.handle();
+            let properties = card.get_properties(best_plane_id).map_err(|_| ProbeError::GetPlaneProperties)?;
+            log::debug!("Plane properties ->");
+            for (id, value) in properties.iter() {
+                let prop = card.get_property(*id).map_err(|_| ProbeError::Unknown)?;
+                let name = prop.name().to_str().unwrap_or("Invalid UTF-8");
+                match name {
+                    "type" => {
+                        log::debug!("\t{} = {:?}", name, if *value == PlaneType::Primary as u64 { "Primary" } else if *value == PlaneType::Cursor as u64 { "Cursor" } else if *value == PlaneType::Overlay as u64 { "Overlay" } else { "Unknown" });
+                    },
+                    _ => {
+                        log::debug!("\t{} = {:?}", name, value);
+                    }
+                }
             }
+        }
+        let best_plane = get_primary_plane(&card, &planes)?;
+        let fb = best_plane.framebuffer().ok_or(ProbeError::Unknown)?;
+        log::debug!("{} has {:?}", best_plane, fb);
+        let fb_info = card.get_planar_framebuffer(fb).map_err(|_| ProbeError::Unknown)?;
+        log::debug!("{} has {:?}", best_plane, fb_info);
+        let gem_bufs = fb_info.buffers();
+        // ref: https://docs.kernel.org/gpu/drm-mm.html#c.drm_gem_prime_handle_to_fd
+        // Couldn't find any documentation on the flags argument, but it seems like DRM_CLOEXEC is necessary
+        for (i, buf) in gem_bufs.iter().enumerate() {
+            log::debug!("{} has GEM buffer {}: {:?}", best_plane, i, buf);
+            let buf = match buf {
+                Some(buf) => buf,
+                None => {
+                    continue;
+                }
+            };
+            let prime = card.buffer_to_prime_fd(*buf, CLOEXEC).map_err(|_| ProbeError::Unknown)?;
         }
     }
 
