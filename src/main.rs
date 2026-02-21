@@ -7,7 +7,7 @@ mod drm_kms;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::builder().filter_level(log::LevelFilter::Debug).init();
 
-    drm_kms::probe::probe()?;
+    drm_kms::egl::egl_main()?;
 
     Ok(())
 }

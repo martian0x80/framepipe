@@ -4,9 +4,11 @@ use drm::Device as BasicDevice;
 use drm::CLOEXEC;
 use std::fs::File;
 use std::collections::BinaryHeap;
-
+use std::os::fd::OwnedFd;
 use std::os::unix::io::AsFd;
 use std::os::unix::io::BorrowedFd;
+
+use crate::drm_kms::types;
 
 struct Card(File);
 
@@ -50,6 +52,12 @@ pub enum ProbeError {
     NoMatchingPlanesForConnector,
     #[error("Failed to get properties for plane")]
     GetPlaneProperties,
+    #[error("Failed to find primary plane for connector")]
+    NoPrimaryPlaneForConnector,
+    #[error("Failed to get framebuffer info")]
+    GetFramebufferInfo,
+    #[error("Failed to convert buffer handle to PRIME fd")]
+    BufferToPrimeFd,
     #[error("Unknown probe error")]
     Unknown,
 }
@@ -154,10 +162,10 @@ fn get_primary_plane(card: &Card, planes: &[drm::control::plane::Info]) -> Resul
         }
     }
     log::warn!("No primary plane found among matching planes");
-    Err(ProbeError::NoMatchingPlanesForConnector)
+    Err(ProbeError::NoPrimaryPlaneForConnector)
 }
 
-pub fn probe() -> Result<(), ProbeError> {
+pub fn probe() -> Result<types::ProbeResult, ProbeError> {
 
     get_dri_cards()?;
 
@@ -171,8 +179,6 @@ pub fn probe() -> Result<(), ProbeError> {
 
     log::debug!("Driver: {:?}", res);
     let connected_connectors = get_connected_connectors(&card)?;
-
-    // let mut primary_plane = None;
 
     for connector in connected_connectors {
         let planes = get_matching_plane_from_connector(&card, &connector)?;
@@ -199,25 +205,38 @@ pub fn probe() -> Result<(), ProbeError> {
                 }
             }
         }
-        let best_plane = get_primary_plane(&card, &planes)?;
-        let fb = best_plane.framebuffer().ok_or(ProbeError::Unknown)?;
-        log::debug!("{} has {:?}", best_plane, fb);
-        let fb_info = card.get_planar_framebuffer(fb).map_err(|_| ProbeError::Unknown)?;
-        log::debug!("{} has {:?}", best_plane, fb_info);
-        let gem_bufs = fb_info.buffers();
+        let primary_plane = get_primary_plane(&card, &planes)?;
+        let fb = primary_plane.framebuffer().ok_or(ProbeError::Unknown)?;
+        log::debug!("{} has {:?}", primary_plane, fb);
+        let fb_info = card.get_planar_framebuffer(fb).map_err(|_| ProbeError::GetFramebufferInfo)?;
+        log::debug!("{} has {:?}", primary_plane, fb_info);
+        let mut plane_fds: Vec<Option<OwnedFd>> = Vec::with_capacity(fb_info.buffers().len());
         // ref: https://docs.kernel.org/gpu/drm-mm.html#c.drm_gem_prime_handle_to_fd
-        // Couldn't find any documentation on the flags argument, but it seems like DRM_CLOEXEC is necessary
-        for (i, buf) in gem_bufs.iter().enumerate() {
-            log::debug!("{} has GEM buffer {}: {:?}", best_plane, i, buf);
-            let buf = match buf {
-                Some(buf) => buf,
-                None => {
-                    continue;
+        // it seems like DRM_CLOEXEC is necessary
+        for (i, buf) in fb_info.buffers().iter().enumerate() {
+            match buf {
+                Some(handle) => {
+                    let fd = card.buffer_to_prime_fd(*handle, CLOEXEC).map_err(|_| ProbeError::BufferToPrimeFd)?;
+                    log::debug!(
+                        "plane {}: handle={:?} offset={} pitch={} -> prime_fd",
+                        i,
+                        handle,
+                        fb_info.offsets()[i],
+                        fb_info.pitches()[i]
+                    );
+                    plane_fds.push(Some(fd));
                 }
-            };
-            let prime = card.buffer_to_prime_fd(*buf, CLOEXEC).map_err(|_| ProbeError::Unknown)?;
+                None => {
+                    log::debug!("plane {}: no buffer handle available", i);
+                    plane_fds.push(None);
+                }
+            }
         }
+        return Ok(types::ProbeResult {
+            fb_info,
+            plane_fds: plane_fds,
+        });
     }
 
-    Ok(())
+    Err(ProbeError::NoConnectedConnectors)
 }
