@@ -1,10 +1,26 @@
-use std::os::fd::{RawFd, OwnedFd};
+use std::os::fd::OwnedFd;
+use std::os::unix::io::{AsFd, BorrowedFd};
+use std::fs::File;
+use drm::control::Device as ControlDevice;
+use drm::Device as BasicDevice;
 
-#[derive(Clone, Copy)]
-pub struct Plane {
-    pub fd: RawFd,
-    pub offset: u32,
-    pub pitch: u32,
+#[derive(Debug)]
+pub(crate) struct Card(File);
+
+impl AsFd for Card {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.0.as_fd()
+    }
+}
+
+impl BasicDevice for Card {}
+impl ControlDevice for Card {}
+
+impl Card {
+    pub fn open(path: &str) -> std::io::Result<Self> {
+        let file = File::open(path)?;
+        Ok(Card(file))
+    }
 }
 
 #[derive(Debug)]

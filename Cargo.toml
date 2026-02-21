@@ -9,7 +9,7 @@ drm-sys = "0.8.0"
 env_logger = "0.11.9"
 eyre = "0.6.12"
 fastrand = "2.3.0"
-gbm = "0.18.0"
+gbm = { version = "0.18.0", features = ["drm-support"] }
 gl = "0.14.0"
 khronos-egl = { version = "6.0.0", features = ["static"] }
 log = "0.4.29"

@@ -2,36 +2,16 @@ use drm::control::{connector, Device as ControlDevice, PlaneType};
 use drm::ClientCapability::{UniversalPlanes, Atomic};
 use drm::Device as BasicDevice;
 use drm::CLOEXEC;
-use std::fs::File;
 use std::collections::BinaryHeap;
 use std::os::fd::OwnedFd;
-use std::os::unix::io::AsFd;
-use std::os::unix::io::BorrowedFd;
 
-use crate::drm_kms::types;
-
-struct Card(File);
-
-impl AsFd for Card {
-    fn as_fd(&self) -> BorrowedFd<'_> {
-        self.0.as_fd()
-    }
-}
-
-impl BasicDevice for Card {}
-impl ControlDevice for Card {}
-
-impl Card {
-    fn open(path: &str) -> std::io::Result<Self> {
-        let file = File::open(path)?;
-        Ok(Card(file))
-    }
-}
+use crate::drm_kms::drm::{DrmInitError, init_drm_device};
+use crate::drm_kms::types::{self, Card};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProbeError {
     #[error("Failed to open DRM device: {0}")]
-    OpenDevice(#[source] std::io::Error),
+    OpenDevice(#[source] DrmInitError),
     #[error("Failed to set client capability")]
     SetClientCapability,
     #[error("Failed to get resource handles")]
@@ -84,7 +64,7 @@ impl Ord for ConnectorHeapItem {
     }
 }
 
-fn get_dri_cards() -> Result<Vec<String>, ProbeError> {
+pub fn get_dri_cards() -> Result<Vec<String>, ProbeError> {
     let mut cards = Vec::new();
     for i in 0..16 {
         let path = format!("/dev/dri/card{}", i);
@@ -166,12 +146,8 @@ fn get_primary_plane(card: &Card, planes: &[drm::control::plane::Info]) -> Resul
     Err(ProbeError::NoPrimaryPlaneForConnector)
 }
 
-pub fn probe() -> Result<types::ProbeResult, ProbeError> {
-
-    get_dri_cards()?;
-
-    let card = Card::open("/dev/dri/card1").map_err(ProbeError::OpenDevice)?;
-
+pub fn probe(card_path: &str) -> Result<types::ProbeResult, ProbeError> {
+    let card = init_drm_device(card_path).map_err(|e| ProbeError::OpenDevice(e))?;
     card.set_client_capability(Atomic, true).map_err(|_| ProbeError::SetClientCapability)?;
     card.set_client_capability(UniversalPlanes, true).map_err(|_| ProbeError::SetClientCapability)?;
     // card.set_client_capability(CursorPlaneHotspot, true)?;

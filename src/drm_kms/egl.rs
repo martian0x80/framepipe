@@ -2,9 +2,17 @@
 // wow this was probably most awful part of the codebase to write
 // i am just too dumb for this
 
-use std::os::fd::AsRawFd;
+use gbm::{AsRaw, BufferObjectFlags, Device, Format};
+use std::{
+    os::fd::{AsFd, AsRawFd},
+    rc::Rc,
+};
 
-use crate::drm_kms::{probe::probe, types::ProbeResult};
+use crate::drm_kms::{
+    drm::{DrmInitError, init_drm_device},
+    probe::probe,
+    types::{Card, ProbeResult},
+};
 extern crate khronos_egl;
 
 // dma_buf import tokens
@@ -33,10 +41,32 @@ const EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT: i32 = 0x3448;
 const EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT: i32 = 0x3449;
 const EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT: i32 = 0x344A;
 
+const EGL_PLATFORM_GBM_KHR: u32 = 0x31D7;
 const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
+
+#[derive(Debug, Clone, Copy)]
+pub enum EglBackend {
+    Gbm,
+    Surfaceless,
+}
+
+#[derive(Debug)]
+pub struct EglCtx {
+    pub egl: khronos_egl::Instance<khronos_egl::Static>,
+    pub display: khronos_egl::Display,
+    pub context: khronos_egl::Context,
+    pub surface: khronos_egl::Surface,
+    pub backend: EglBackend,
+
+    // keep alive for GBM path
+    _drm_file: Option<Card>,
+    // _gbm_dev: Option<gbm::Device<Card>>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EglError {
+    #[error("Failed to create GBM device")]
+    GbmCreateDevice(#[source] super::drm::DrmInitError),
     #[error("Failed to probe DRM device")]
     Probe(#[source] crate::drm_kms::probe::ProbeError),
     #[error("Failed to initialize EGL")]
@@ -144,39 +174,39 @@ fn build_attrs(
     attrs
 }
 
-#[derive(Debug)]
-pub struct EglCtx {
-    pub egl: khronos_egl::Instance<khronos_egl::Static>,
-    pub display: khronos_egl::Display,
-    pub context: khronos_egl::Context,
-    pub surface: khronos_egl::Surface, // tiny pbuffer for safe current context
+fn client_exts(egl: &khronos_egl::Instance<khronos_egl::Static>) -> String {
+    unsafe {
+        egl.query_string(None, khronos_egl::EXTENSIONS)
+            .ok()
+            .and_then(|s| s.to_str().ok().map(|x| x.to_owned()))
+            .unwrap_or_else(|| "".to_string())
+    }
 }
 
-#[allow(unused_unsafe)]
-pub fn init_egl_headless() -> Result<EglCtx, EglError> {
-    let egl = khronos_egl::Instance::new(khronos_egl::Static);
+fn has_ext(exts: &str, name: &str) -> bool {
+    exts.split_whitespace().any(|e| e == name)
+}
 
-    // 1) Surfaceless platform display (avoids X11 auth / polkit-looking noise)
-    let display = unsafe {
-        egl.get_platform_display(
-            EGL_PLATFORM_SURFACELESS_MESA,
-            std::ptr::null_mut(),
-            &[khronos_egl::ATTRIB_NONE],
-        )
-    }.map_err(|e| EglError::EglInit(e))?;
+fn init_display_common(
+    egl_i: &khronos_egl::Instance<khronos_egl::Static>,
+    display: khronos_egl::Display,
+) -> Result<(khronos_egl::Context, khronos_egl::Surface), EglError> {
+    unsafe { egl_i.initialize(display) }.map_err(EglError::EglInit)?;
 
-    unsafe { egl.initialize(display) }.map_err(|e| EglError::EglInit(e))?;
+    let dext = unsafe { egl_i.query_string(Some(display), khronos_egl::EXTENSIONS) }
+        .map_err(EglError::QueryExt)?
+        .to_str()
+        .map_err(|_| EglError::Unknown)?
+        .to_owned();
 
-    // 2) Check required dma-buf import extension(s)
-    let exts = unsafe { egl.query_string(Some(display), khronos_egl::EXTENSIONS) }.unwrap_or_default();
-    log::debug!("EGL extensions: {}", exts.to_str().unwrap_or("Invalid UTF-8"));
-    if !exts.to_str().map_err(|e| EglError::Unknown)?.contains("EGL_EXT_image_dma_buf_import") {
-        return Err(EglError::MissingExt("EGL_EXT_image_dma_buf_import"));
+    if !has_ext(&dext, "EGL_EXT_image_dma_buf_import")
+        && !has_ext(&dext, "EGL_EXT_image_dma_buf_import_modifiers")
+    {
+        return Err(EglError::MissingExt(
+            "EGL_EXT_image_dma_buf_import or EGL_EXT_image_dma_buf_import_modifiers",
+        ));
     }
-    // Optional but recommended:
-    // EGL_EXT_image_dma_buf_import_modifiers
 
-    // 3) GLES3 config + tiny pbuffer + context
     let cfg_attribs = [
         khronos_egl::SURFACE_TYPE,
         khronos_egl::PBUFFER_BIT,
@@ -193,28 +223,144 @@ pub fn init_egl_headless() -> Result<EglCtx, EglError> {
         khronos_egl::NONE,
     ];
 
-    let config = unsafe { egl.choose_first_config(display, &cfg_attribs) }
+    let config = unsafe { egl_i.choose_first_config(display, &cfg_attribs) }
         .map_err(|_| EglError::ChooseConfig)?
         .ok_or(EglError::ChooseConfig)?;
 
-    let pbuf_attribs = [khronos_egl::WIDTH, 1, khronos_egl::HEIGHT, 1, khronos_egl::NONE];
-    let surface = unsafe { egl.create_pbuffer_surface(display, config, &pbuf_attribs) }
+    let pbuf_attribs = [
+        khronos_egl::WIDTH,
+        1,
+        khronos_egl::HEIGHT,
+        1,
+        khronos_egl::NONE,
+    ];
+    let surface = unsafe { egl_i.create_pbuffer_surface(display, config, &pbuf_attribs) }
         .map_err(|_| EglError::ChooseConfig)?;
 
-    unsafe { egl.bind_api(khronos_egl::OPENGL_ES_API) }.map_err(|e| EglError::EglInit(e))?;
+    unsafe { egl_i.bind_api(khronos_egl::OPENGL_ES_API) }.map_err(|e| EglError::EglInit(e))?;
     let ctx_attribs = [khronos_egl::CONTEXT_CLIENT_VERSION, 3, khronos_egl::NONE];
-    let context = unsafe { egl.create_context(display, config, None, &ctx_attribs) }
+    let context = unsafe { egl_i.create_context(display, config, None, &ctx_attribs) }
         .map_err(|e| EglError::CreateContext(e))?;
 
-    unsafe { egl.make_current(display, Some(surface), Some(surface), Some(context)) }
+    unsafe { egl_i.make_current(display, Some(surface), Some(surface), Some(context)) }
         .map_err(|e| EglError::MakeCurrent(e))?;
 
-    Ok(EglCtx {
-        egl,
-        display,
-        context,
-        surface,
-    })
+    Ok((context, surface))
+}
+
+fn try_init_gbm(
+    egl_i: &khronos_egl::Instance<khronos_egl::Static>,
+    card_path: &str,
+) -> Result<
+    (
+        khronos_egl::Display,
+        khronos_egl::Context,
+        khronos_egl::Surface,
+        Card,
+    ),
+    EglError,
+> {
+    let drm_file = init_drm_device(card_path).map_err(|e| EglError::GbmCreateDevice(e))?;
+    let drm_fd = drm_file.as_fd();
+
+    let gbm_dev = gbm::Device::new(drm_fd)
+        .map_err(|e| EglError::GbmCreateDevice(DrmInitError::OpenDevice(e)))?;
+
+    let display = unsafe {
+        egl_i.get_platform_display(
+            EGL_PLATFORM_GBM_KHR,
+            gbm_dev.as_raw() as *mut _,
+            &[khronos_egl::ATTRIB_NONE],
+        )
+    }
+    .map_err(EglError::EglInit)?;
+
+    match init_display_common(egl_i, display) {
+        // gbm_dev carries the life of drm_file now, no point returning both
+        Ok((ctx, surf)) => Ok((display, ctx, surf, drm_file)),
+        Err(e) => {
+            drop(gbm_dev);
+            Err(e)
+        }
+    }
+}
+
+fn try_init_surfaceless(
+    egl_i: &khronos_egl::Instance<khronos_egl::Static>,
+) -> Result<
+    (
+        khronos_egl::Display,
+        khronos_egl::Context,
+        khronos_egl::Surface,
+    ),
+    EglError,
+> {
+    let display = unsafe {
+        egl_i.get_platform_display(
+            EGL_PLATFORM_SURFACELESS_MESA,
+            std::ptr::null_mut(),
+            &[khronos_egl::ATTRIB_NONE],
+        )
+    }
+    .map_err(|e| EglError::EglInit(e))?;
+
+    let (ctx, surf) = init_display_common(egl_i, display)?;
+    Ok((display, ctx, surf))
+}
+
+pub fn init_egl(card_path: &str) -> Result<EglCtx, EglError> {
+    let egl_i = khronos_egl::Instance::new(khronos_egl::Static);
+    let cext = client_exts(&egl_i);
+    log::debug!("EGL client extensions: {}", cext);
+
+    // required for dma-buf import
+
+    // if !has_ext(&cext, "EGL_EXT_image_dma_buf_import")
+    //     && !has_ext(&cext, "EGL_EXT_image_dma_buf_import_modifiers")
+    // {
+    //     return Err(EglError::MissingExt(
+    //         "EGL_EXT_image_dma_buf_import or EGL_EXT_image_dma_buf_import_modifiers",
+    //     ));
+    // }
+
+    // i have no idea if the order or dependecies are correct here
+    let can_gbm = (has_ext(&cext, "EGL_EXT_platform_base")
+        && has_ext(&cext, "EGL_KHR_platform_gbm"))
+        || has_ext(&cext, "EGL_MESA_platform_gbm");
+
+    let can_surfaceless = (has_ext(&cext, "EGL_EXT_platform_base")
+        && has_ext(&cext, "EGL_MESA_platform_surfaceless"))
+        || has_ext(&cext, "EGL_KHR_surfaceless_context")
+        || has_ext(&cext, "EGL_MESA_configless_context");
+
+    if can_gbm {
+        if let Ok((display, context, surface, gbm_dev)) = try_init_gbm(&egl_i, card_path)
+        {
+            return Ok(EglCtx {
+                egl: egl_i,
+                display,
+                context,
+                surface,
+                backend: EglBackend::Gbm,
+                _drm_file: Some(gbm_dev),
+            });
+        }
+    }
+
+    if can_surfaceless {
+        if let Ok((display, context, surface)) = try_init_surfaceless(&egl_i) {
+            return Ok(EglCtx {
+                egl: egl_i,
+                display,
+                context,
+                surface,
+                backend: EglBackend::Surfaceless,
+                _drm_file: None,
+            });
+        }
+    }
+
+    Err(EglError::Unknown)
 }
 
 fn close_fds(plane_fds: &[Option<std::os::fd::OwnedFd>]) {
@@ -226,9 +372,16 @@ fn close_fds(plane_fds: &[Option<std::os::fd::OwnedFd>]) {
     }
 }
 
-pub fn egl_main() -> Result<(), EglError> {
-    let ProbeResult { fb_info, plane_fds } = probe().map_err(|e| EglError::Probe(e))?;
-    let EglCtx { egl, display, context: _, surface: _ } = init_egl_headless()?;
+pub fn egl_main(card_path: &str) -> Result<(), EglError> {
+    let ProbeResult { fb_info, plane_fds } = probe(card_path).map_err(|e| EglError::Probe(e))?;
+    let EglCtx {
+        egl,
+        display,
+        context: _,
+        surface: _,
+        backend: _,
+        _drm_file: _,
+    } = init_egl(card_path)?;
     let (w, h) = (fb_info.size().0 as i32, fb_info.size().1 as i32);
     let fourcc = fb_info.pixel_format() as u32;
     let modifier: Option<u64> = fb_info.modifier().map(|m| m.into());
@@ -269,7 +422,10 @@ pub fn egl_main() -> Result<(), EglError> {
     .map_err(|e| EglError::CreateImage(e))?;
 
     image.as_ptr();
-    log::info!("Successfully created EGL image from dma-buf! | Image handle: {:?}", image.as_ptr());
+    log::info!(
+        "Successfully created EGL image from dma-buf! | Image handle: {:?}",
+        image.as_ptr()
+    );
 
     close_fds(&plane_fds);
 
