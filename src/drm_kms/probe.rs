@@ -108,7 +108,8 @@ fn get_connected_connectors(card: &Card) -> Result<Vec<connector::Info>, ProbeEr
 
     for connector in res.connectors() {
         let info = card.get_connector(*connector, false).map_err(|_| ProbeError::GetConnectorInfo)?;
-        if info.state() == connector::State::Connected {
+        // connected connectors that are actually being displayed
+        if info.state() == connector::State::Connected && info.current_encoder().is_some() {
             log::info!("Connected connector: {}", info);
             log::debug!("Connector details: {:?}", info);
             connectors.push(ConnectorHeapItem(info));

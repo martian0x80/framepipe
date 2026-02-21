@@ -228,7 +228,7 @@ fn close_fds(plane_fds: &[Option<std::os::fd::OwnedFd>]) {
 
 pub fn egl_main() -> Result<(), EglError> {
     let ProbeResult { fb_info, plane_fds } = probe().map_err(|e| EglError::Probe(e))?;
-    let EglCtx { egl, display, context, surface } = init_egl_headless()?;
+    let EglCtx { egl, display, context: _, surface: _ } = init_egl_headless()?;
     let (w, h) = (fb_info.size().0 as i32, fb_info.size().1 as i32);
     let fourcc = fb_info.pixel_format() as u32;
     let modifier: Option<u64> = fb_info.modifier().map(|m| m.into());
@@ -269,7 +269,7 @@ pub fn egl_main() -> Result<(), EglError> {
     .map_err(|e| EglError::CreateImage(e))?;
 
     image.as_ptr();
-    log::info!("Successfully created EGL image from dma-buf!, Image handle: {:?}", image.as_ptr());
+    log::info!("Successfully created EGL image from dma-buf! | Image handle: {:?}", image.as_ptr());
 
     close_fds(&plane_fds);
 
