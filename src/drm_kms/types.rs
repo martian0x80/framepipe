@@ -1,6 +1,6 @@
 use std::os::fd::OwnedFd;
 use std::os::unix::io::{AsFd, BorrowedFd};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use drm::control::Device as ControlDevice;
 use drm::Device as BasicDevice;
 
@@ -18,7 +18,10 @@ impl ControlDevice for Card {}
 
 impl Card {
     pub fn open(path: &str) -> std::io::Result<Self> {
-        let file = File::open(path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)?;
         Ok(Card(file))
     }
 }

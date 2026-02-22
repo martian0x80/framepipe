@@ -9,9 +9,7 @@ use std::{
 };
 
 use crate::drm_kms::{
-    drm::{DrmInitError, init_drm_device},
-    probe::probe,
-    types::{Card, ProbeResult},
+    debug, drm::{DrmInitError, init_drm_device}, probe::probe, types::{Card, ProbeResult}
 };
 extern crate khronos_egl;
 
@@ -248,6 +246,7 @@ fn init_display_common(
     Ok((context, surface))
 }
 
+// fuck gbm for now
 fn try_init_gbm(
     egl_i: &khronos_egl::Instance<khronos_egl::Static>,
     card_path: &str,
@@ -260,8 +259,17 @@ fn try_init_gbm(
     ),
     EglError,
 > {
+    log::debug!(
+        "Attempting to initialize GBM device for card at {}",
+        card_path
+    );
     let drm_file = init_drm_device(card_path).map_err(|e| EglError::GbmCreateDevice(e))?;
     let drm_fd = drm_file.as_fd();
+    log::debug!(
+        "Opened DRM device at {} with fd {}",
+        card_path,
+        drm_fd.as_raw_fd()
+    );
 
     let gbm_dev = gbm::Device::new(drm_fd)
         .map_err(|e| EglError::GbmCreateDevice(DrmInitError::OpenDevice(e)))?;
@@ -295,6 +303,7 @@ fn try_init_surfaceless(
     ),
     EglError,
 > {
+    log::debug!("Attempting to initialize surfaceless EGL display");
     let display = unsafe {
         egl_i.get_platform_display(
             EGL_PLATFORM_SURFACELESS_MESA,
@@ -313,16 +322,6 @@ pub fn init_egl(card_path: &str) -> Result<EglCtx, EglError> {
     let cext = client_exts(&egl_i);
     log::debug!("EGL client extensions: {}", cext);
 
-    // required for dma-buf import
-
-    // if !has_ext(&cext, "EGL_EXT_image_dma_buf_import")
-    //     && !has_ext(&cext, "EGL_EXT_image_dma_buf_import_modifiers")
-    // {
-    //     return Err(EglError::MissingExt(
-    //         "EGL_EXT_image_dma_buf_import or EGL_EXT_image_dma_buf_import_modifiers",
-    //     ));
-    // }
-
     // i have no idea if the order or dependecies are correct here
     let can_gbm = (has_ext(&cext, "EGL_EXT_platform_base")
         && has_ext(&cext, "EGL_KHR_platform_gbm"))
@@ -333,19 +332,21 @@ pub fn init_egl(card_path: &str) -> Result<EglCtx, EglError> {
         || has_ext(&cext, "EGL_KHR_surfaceless_context")
         || has_ext(&cext, "EGL_MESA_configless_context");
 
-    if can_gbm {
-        if let Ok((display, context, surface, gbm_dev)) = try_init_gbm(&egl_i, card_path)
-        {
-            return Ok(EglCtx {
-                egl: egl_i,
-                display,
-                context,
-                surface,
-                backend: EglBackend::Gbm,
-                _drm_file: Some(gbm_dev),
-            });
-        }
-    }
+    // if can_gbm {
+    //     if let Ok((display, context, surface, gbm_dev)) = try_init_gbm(&egl_i, card_path)
+    //     {
+    //         return Ok(EglCtx {
+    //             egl: egl_i,
+    //             display,
+    //             context,
+    //             surface,
+    //             backend: EglBackend::Gbm,
+    //             _drm_file: Some(gbm_dev),
+    //         });
+    //     } else if let Err(e) = try_init_gbm(&egl_i, card_path) {
+    //         log::warn!("Failed to initialize GBM device, falling back to surfaceless if available: {}", e);
+    //     }
+    // }
 
     if can_surfaceless {
         if let Ok((display, context, surface)) = try_init_surfaceless(&egl_i) {
@@ -357,6 +358,8 @@ pub fn init_egl(card_path: &str) -> Result<EglCtx, EglError> {
                 backend: EglBackend::Surfaceless,
                 _drm_file: None,
             });
+        } else if let Err(e) = try_init_surfaceless(&egl_i) {
+            log::warn!("Failed to initialize surfaceless EGL display: {}", e);
         }
     }
 
@@ -369,6 +372,61 @@ fn close_fds(plane_fds: &[Option<std::os::fd::OwnedFd>]) {
             let _ = fd.as_raw_fd();
             // die now
         }
+    }
+}
+
+fn egl_image_to_texture(
+    egl: &khronos_egl::Instance<khronos_egl::Static>,
+    image: khronos_egl::Image,
+) -> Result<u32, EglError> {
+    if image.as_ptr().is_null() {
+        return Err(EglError::Unknown);
+    }
+
+    unsafe {
+        // Load GL functions
+        let gl_gen_textures = egl
+            .get_proc_address("glGenTextures")
+            .ok_or(EglError::MissingExt("glGenTextures"))?;
+        let gl_bind_texture = egl
+            .get_proc_address("glBindTexture")
+            .ok_or(EglError::MissingExt("glBindTexture"))?;
+        let gl_tex_param_i = egl
+            .get_proc_address("glTexParameteri")
+            .ok_or(EglError::MissingExt("glTexParameteri"))?;
+        let gl_egl_image_target = egl
+            .get_proc_address("glEGLImageTargetTexture2DOES")
+            .ok_or(EglError::MissingExt("glEGLImageTargetTexture2DOES"))?;
+
+        let gl_gen_textures: unsafe extern "C" fn(i32, *mut u32) =
+            std::mem::transmute(gl_gen_textures);
+        let gl_bind_texture: unsafe extern "C" fn(u32, u32) = std::mem::transmute(gl_bind_texture);
+        let gl_tex_param_i: unsafe extern "C" fn(u32, u32, i32) =
+            std::mem::transmute(gl_tex_param_i);
+        let gl_egl_image_target: unsafe extern "C" fn(u32, *const std::ffi::c_void) =
+            std::mem::transmute(gl_egl_image_target);
+
+        let mut tex: u32 = 0;
+        gl_gen_textures(1, &mut tex);
+
+        const GL_TEXTURE_2D: u32 = 0x0DE1;
+        const GL_LINEAR: u32 = 0x2601;
+        const GL_CLAMP_TO_EDGE: u32 = 0x812F;
+        const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
+        const GL_TEXTURE_MAG_FILTER: u32 = 0x2800;
+        const GL_TEXTURE_WRAP_S: u32 = 0x2802;
+        const GL_TEXTURE_WRAP_T: u32 = 0x2803;
+
+        gl_bind_texture(GL_TEXTURE_2D, tex);
+
+        gl_tex_param_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR as i32);
+        gl_tex_param_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR as i32);
+        gl_tex_param_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE as i32);
+        gl_tex_param_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE as i32);
+
+        gl_egl_image_target(GL_TEXTURE_2D, image.as_ptr() as *const std::ffi::c_void);
+
+        Ok(tex)
     }
 }
 
@@ -426,6 +484,10 @@ pub fn egl_main(card_path: &str) -> Result<(), EglError> {
         "Successfully created EGL image from dma-buf! | Image handle: {:?}",
         image.as_ptr()
     );
+
+    let texture = egl_image_to_texture(&egl, image)?;
+    log::info!("Imported EGLImage into GL texture {}", texture);
+    let _ = debug::debug_dump_texture_ppm(&egl, texture, w, h, "debug_output.ppm");
 
     close_fds(&plane_fds);
 
