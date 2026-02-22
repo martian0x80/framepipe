@@ -3,13 +3,19 @@
 // i am just too dumb for this
 
 use gbm::{AsRaw, BufferObjectFlags, Device, Format};
+use glow::{HasContext, NativeTexture};
 use std::{
+    num::NonZero,
     os::fd::{AsFd, AsRawFd},
     rc::Rc,
 };
 
 use crate::drm_kms::{
-    debug, drm::{DrmInitError, init_drm_device}, probe::probe, types::{Card, ProbeResult}
+    debug,
+    drm::{DrmInitError, init_drm_device},
+    egl_dmabuf_export, gpu_pipeline,
+    probe::probe,
+    types::{Card, ProbeResult},
 };
 extern crate khronos_egl;
 
@@ -83,6 +89,10 @@ pub enum EglError {
     CreateImage(#[source] khronos_egl::Error),
     #[error("Failed to query EGL extensions")]
     QueryExt(#[source] khronos_egl::Error),
+    #[error("GPU pipeline error: {0}")]
+    Pipeline(String),
+    #[error("DMA-BUF export error: {0}")]
+    Export(String),
     #[error("Unknown EGL error")]
     Unknown,
 }
@@ -343,23 +353,24 @@ pub fn init_egl(card_path: &str) -> Result<EglCtx, EglError> {
     //             backend: EglBackend::Gbm,
     //             _drm_file: Some(gbm_dev),
     //         });
-    //     } else if let Err(e) = try_init_gbm(&egl_i, card_path) {
-    //         log::warn!("Failed to initialize GBM device, falling back to surfaceless if available: {}", e);
     //     }
     // }
 
     if can_surfaceless {
-        if let Ok((display, context, surface)) = try_init_surfaceless(&egl_i) {
-            return Ok(EglCtx {
-                egl: egl_i,
-                display,
-                context,
-                surface,
-                backend: EglBackend::Surfaceless,
-                _drm_file: None,
-            });
-        } else if let Err(e) = try_init_surfaceless(&egl_i) {
-            log::warn!("Failed to initialize surfaceless EGL display: {}", e);
+        match try_init_surfaceless(&egl_i) {
+            Ok((display, context, surface)) => {
+                return Ok(EglCtx {
+                    egl: egl_i,
+                    display,
+                    context,
+                    surface,
+                    backend: EglBackend::Surfaceless,
+                    _drm_file: None,
+                });
+            }
+            Err(e) => {
+                log::warn!("Failed to initialize surfaceless EGL display: {}", e);
+            }
         }
     }
 
@@ -435,7 +446,7 @@ pub fn egl_main(card_path: &str) -> Result<(), EglError> {
     let EglCtx {
         egl,
         display,
-        context: _,
+        context,
         surface: _,
         backend: _,
         _drm_file: _,
@@ -489,7 +500,54 @@ pub fn egl_main(card_path: &str) -> Result<(), EglError> {
     log::info!("Imported EGLImage into GL texture {}", texture);
     let _ = debug::debug_dump_texture_ppm(&egl, texture, w, h, "debug_output.ppm");
 
-    close_fds(&plane_fds);
+    let pipeline =
+        unsafe { gpu_pipeline::GpuPipeline::new(&egl, w, h) }.map_err(EglError::Pipeline)?;
+
+    // no cursor yet
+    let cursor_state = gpu_pipeline::CursorState {
+        tex: None,
+        x: 0.0,
+        y: 0.0,
+        w: 0.0,
+        h: 0.0,
+    };
+
+    let fence = unsafe {
+        pipeline.render_with_cursor(NativeTexture(NonZero::new(texture).unwrap()), &cursor_state)
+    }
+    .map_err(EglError::Pipeline)?;
+
+    unsafe {
+        pipeline
+            .gl
+            .client_wait_sync(fence, glow::SYNC_FLUSH_COMMANDS_BIT, 1_000_000_000);
+        pipeline.gl.delete_sync(fence);
+    }
+    log::info!("GPU rendering complete and sync object cleaned up");
+
+    // IMPORTANT: update egl_dmabuf_export API to accept output texture id as `u32`.
+    let exported = unsafe {
+        egl_dmabuf_export::export_rgba_tex_to_dmabuf(
+            &egl,
+            display,
+            context,
+            pipeline.output_texture().0.into(),
+            w,
+            h,
+        )
+    }
+    .map_err(EglError::Export)?;
+
+    log::info!(
+        "Exported dmabuf: {}x{} fourcc=0x{:08x} planes={}",
+        exported.width,
+        exported.height,
+        exported.fourcc,
+        exported.fds.len()
+    );
+
+    // Safe now: EGL already imported refs from input plane fds.
+    drop(plane_fds);
 
     Ok(())
 }

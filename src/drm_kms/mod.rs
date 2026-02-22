@@ -3,3 +3,5 @@ pub mod egl;
 pub mod types;
 pub mod drm;
 pub(crate) mod debug;
+pub mod gpu_pipeline;
+pub mod egl_dmabuf_export;
