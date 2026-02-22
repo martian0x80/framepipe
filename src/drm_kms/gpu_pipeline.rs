@@ -44,7 +44,9 @@ impl GpuPipeline {
                     .unwrap_or(std::ptr::null())
             })
         };
-        log::debug!("GL Version: {}", unsafe { gl.get_parameter_string(glow::VERSION) });
+        log::debug!("GL Version: {}", unsafe {
+            gl.get_parameter_string(glow::VERSION)
+        });
 
         let vs = r#"#version 300 es
             precision mediump float;
@@ -177,7 +179,11 @@ impl GpuPipeline {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
             log::debug!("Framebuffer bound for rendering");
             self.gl.viewport(0, 0, self.out_w, self.out_h);
-            log::debug!("Viewport set to output texture size: {}x{}", self.out_w, self.out_h);
+            log::debug!(
+                "Viewport set to output texture size: {}x{}",
+                self.out_w,
+                self.out_h
+            );
             self.gl.use_program(Some(self.prog));
             log::debug!("Shader program in use for rendering");
 
