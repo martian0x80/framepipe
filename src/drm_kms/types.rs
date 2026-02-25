@@ -31,3 +31,14 @@ pub struct ProbeResult {
     pub fb_info: drm::control::framebuffer::PlanarInfo,
     pub plane_fds: Vec<Option<OwnedFd>>, // index matches fb_info planes
 }
+
+pub struct ExportedDmabuf {
+    pub width: i32,
+    pub height: i32,
+    pub fourcc: u32,
+    pub modifier: u64,
+    pub fds: Vec<OwnedFd>,
+    pub strides: Vec<i32>,
+    pub offsets: Vec<i32>,
+    pub acquire_fence_fd: Option<OwnedFd>,
+}

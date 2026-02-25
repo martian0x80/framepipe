@@ -30,7 +30,7 @@ pub unsafe fn export_rgba_tex_to_dmabuf(
     tex: u32,
     width: i32,
     height: i32,
-) -> Result<crate::drm_kms::gpu_pipeline::ExportedDmabuf, String> {
+) -> Result<crate::drm_kms::types::ExportedDmabuf, String> {
     unsafe {
         let attrs = [EGL_IMAGE_PRESERVED_KHR as usize, 1, EGL_NONE as usize];
         let image = egl
@@ -86,7 +86,7 @@ pub unsafe fn export_rgba_tex_to_dmabuf(
             .map(|fd| OwnedFd::from_raw_fd(fd))
             .collect::<Vec<_>>();
 
-        Ok(crate::drm_kms::gpu_pipeline::ExportedDmabuf {
+        Ok(crate::drm_kms::types::ExportedDmabuf {
             width,
             height,
             fourcc: fourcc as u32,

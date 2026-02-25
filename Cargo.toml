@@ -12,7 +12,12 @@ fastrand = "2.3.0"
 gbm = { version = "0.18.0", features = ["drm-support"] }
 gl = "0.14.0"
 glow = "0.16.0"
+gstreamer = "0.25.0"
+gstreamer-allocators = "0.25.0"
+gstreamer-app = "0.25.0"
+gstreamer-video = "0.25.0"
 khronos-egl = { version = "6.0.0", features = ["static"] }
+libc = "0.2.182"
 log = "0.4.29"
 serde = "1.0.228"
 thiserror = "2.0.18"

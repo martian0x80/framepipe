@@ -545,6 +545,12 @@ pub fn egl_main(card_path: &str) -> Result<(), EglError> {
         exported.fourcc,
         exported.fds.len()
     );
+    
+    let mut encoder = crate::drm_kms::encoder::GstEncoder::new("output.mp4", &exported, 60)
+        .map_err(|e| EglError::Pipeline(e.to_string()))?;
+    encoder.push_frame(&exported).map_err(|e| EglError::Pipeline(e.to_string()))?;
+    encoder.finish().map_err(|e| EglError::Pipeline(e.to_string()))?;
+    log::info!("Video encoding complete, output saved to output.mp4");
 
     // Safe now: EGL already imported refs from input plane fds.
     drop(plane_fds);
