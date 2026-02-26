@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+clap = { version = "4.5.20", features = ["derive"] }
+ctrlc = "3.4.5"
 drm = "0.14.1"
 drm-sys = "0.8.0"
 env_logger = "0.11.9"
@@ -20,6 +22,7 @@ khronos-egl = { version = "6.0.0", features = ["static"] }
 libc = "0.2.182"
 log = "0.4.29"
 serde = "1.0.228"
+signal-hook = "0.3.17"
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["full"] }
 zbus = { version = "5.13.2", default-features = false, features = ["tokio"] }

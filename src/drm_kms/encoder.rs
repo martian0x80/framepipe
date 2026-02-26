@@ -28,6 +28,11 @@ pub struct GstEncoder {
     next_pts_ns: u64,
 }
 
+pub enum EncoderOutput<'a> {
+    File(&'a str),
+    Preview,
+}
+
 fn fourcc_to_drm_format(fourcc: u32) -> Option<&'static str> {
     match fourcc {
         0x34324241 => Some("AB24"), // DRM_FORMAT_ABGR8888
@@ -124,22 +129,38 @@ fn set_appsrc_caps(appsrc: &gst_app::AppSrc, ex: &ExportedDmabuf, fps: u32) -> R
 }
 
 impl GstEncoder {
-    pub fn new(out_path: &str, ex: &ExportedDmabuf, fps: u32) -> Result<Self, EncodeError> {
+    pub fn new_with_output(
+        output: EncoderOutput<'_>,
+        ex: &ExportedDmabuf,
+        fps: u32,
+    ) -> Result<Self, EncodeError> {
         gst::init()?;
 
-        let desc = format!(
-            concat!(
-                "appsrc name=src is-live=true format=time do-timestamp=false block=true ",
-                "! queue ",
-                "! vapostproc ",
-                "! video/x-raw(memory:VAMemory),format=NV12 ",
-                "! vah264enc rate-control=cbr bitrate=12000 key-int-max=120 ",
-                "! h264parse ",
-                "! mp4mux faststart=true ",
-                "! filesink location={out}"
+        let desc = match output {
+            EncoderOutput::File(out_path) => format!(
+                concat!(
+                    "appsrc name=src is-live=true format=time do-timestamp=false block=true ",
+                    "! queue ",
+                    "! vapostproc ",
+                    "! video/x-raw(memory:VAMemory),format=NV12 ",
+                    "! vah264enc rate-control=cbr bitrate=12000 key-int-max=120 ",
+                    "! h264parse ",
+                    "! mp4mux faststart=true ",
+                    "! filesink location={out}"
+                ),
+                out = out_path
             ),
-            out = out_path
-        );
+            EncoderOutput::Preview => String::from(
+                concat!(
+                    "appsrc name=src is-live=true format=time do-timestamp=false block=true ",
+                    "! queue ",
+                    "! vapostproc ",
+                    "! video/x-raw,format=BGRA ",
+                    "! videoconvert ",
+                    "! autovideosink sync=false"
+                ),
+            ),
+        };
         log::debug!("GStreamer pipeline: {desc}");
 
         let element = gst::parse::launch(&desc)?;
@@ -168,6 +189,10 @@ impl GstEncoder {
             frame_ns: 1_000_000_000u64 / fps as u64,
             next_pts_ns: 0,
         })
+    }
+
+    pub fn new(out_path: &str, ex: &ExportedDmabuf, fps: u32) -> Result<Self, EncodeError> {
+        Self::new_with_output(EncoderOutput::File(out_path), ex, fps)
     }
 
     pub fn push_frame(&mut self, ex: &ExportedDmabuf) -> Result<(), EncodeError> {

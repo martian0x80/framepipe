@@ -28,6 +28,7 @@ impl Card {
 
 #[derive(Debug)]
 pub struct ProbeResult {
+    pub fb_id: u32,
     pub fb_info: drm::control::framebuffer::PlanarInfo,
     pub plane_fds: Vec<Option<OwnedFd>>, // index matches fb_info planes
 }

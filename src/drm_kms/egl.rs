@@ -4,17 +4,27 @@
 
 use gbm::{AsRaw, BufferObjectFlags, Device, Format};
 use glow::{HasContext, NativeTexture};
+use signal_hook::consts::signal::{SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
+use signal_hook::flag as signal_flag;
 use std::{
+    fs,
     num::NonZero,
     os::fd::{AsFd, AsRawFd},
+    path::PathBuf,
     rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+    time::{Duration, Instant},
 };
 
 use crate::drm_kms::{
     debug,
     drm::{DrmInitError, init_drm_device},
     egl_dmabuf_export, gpu_pipeline,
-    probe::probe,
+    probe::ProbeSession,
     types::{Card, ProbeResult},
 };
 extern crate khronos_egl;
@@ -52,6 +62,24 @@ const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
 pub enum EglBackend {
     Gbm,
     Surfaceless,
+}
+
+#[derive(Debug, Clone)]
+pub enum CaptureOutput {
+    File(PathBuf),
+    Preview,
+}
+
+#[derive(Debug, Clone)]
+pub struct CaptureOptions {
+    pub card_path: String,
+    pub connector: Option<String>,
+    pub allow_fallback_connector: bool,
+    pub fps: u32,
+    pub dump_frames: bool,
+    pub dump_dir: PathBuf,
+    pub dump_every: u32,
+    pub output: CaptureOutput,
 }
 
 #[derive(Debug)]
@@ -441,16 +469,31 @@ fn egl_image_to_texture(
     }
 }
 
-pub fn egl_main(card_path: &str) -> Result<(), EglError> {
-    let ProbeResult { fb_info, plane_fds } = probe(card_path).map_err(|e| EglError::Probe(e))?;
-    let EglCtx {
-        egl,
-        display,
-        context,
-        surface: _,
-        backend: _,
-        _drm_file: _,
-    } = init_egl(card_path)?;
+fn delete_gl_texture(
+    egl: &khronos_egl::Instance<khronos_egl::Static>,
+    texture: u32,
+) -> Result<(), EglError> {
+    unsafe {
+        let gl_delete_textures = egl
+            .get_proc_address("glDeleteTextures")
+            .ok_or(EglError::MissingExt("glDeleteTextures"))?;
+        let gl_delete_textures: unsafe extern "C" fn(i32, *const u32) =
+            std::mem::transmute(gl_delete_textures);
+        gl_delete_textures(1, &texture as *const u32);
+    }
+    Ok(())
+}
+
+fn import_current_capture_texture(
+    probe_session: &mut ProbeSession,
+    egl: &khronos_egl::Instance<khronos_egl::Static>,
+    display: khronos_egl::Display,
+) -> Result<(u32, i32, i32, u32), EglError> {
+    let ProbeResult {
+        fb_id,
+        fb_info,
+        plane_fds,
+    } = probe_session.capture_frame().map_err(EglError::Probe)?;
     let (w, h) = (fb_info.size().0 as i32, fb_info.size().1 as i32);
     let fourcc = fb_info.pixel_format() as u32;
     let modifier: Option<u64> = fb_info.modifier().map(|m| m.into());
@@ -460,12 +503,11 @@ pub fn egl_main(card_path: &str) -> Result<(), EglError> {
             Some(fd) => fd.as_raw_fd(),
             None => continue,
         };
-
         let offset = fb_info.offsets()[i];
         let pitch = fb_info.pitches()[i];
-
         planes.push((i, fd, offset, pitch));
     }
+
     let attrs_mod = build_attrs(w, h, fourcc, &planes, modifier, true);
     let image = unsafe {
         egl.create_image(
@@ -488,16 +530,34 @@ pub fn egl_main(card_path: &str) -> Result<(), EglError> {
             )
         }
     })
-    .map_err(|e| EglError::CreateImage(e))?;
+    .map_err(EglError::CreateImage)?;
 
-    image.as_ptr();
+    let texture = egl_image_to_texture(egl, image)?;
+    Ok((texture, w, h, fb_id))
+}
+
+pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
+    let EglCtx {
+        egl,
+        display,
+        context,
+        surface: _,
+        backend: _,
+        _drm_file: _,
+    } = init_egl(&options.card_path)?;
+    let mut probe_session = ProbeSession::new_with_connector(
+        &options.card_path,
+        options.connector.clone(),
+        options.allow_fallback_connector,
+    )
+    .map_err(EglError::Probe)?;
+    let (texture, w, h, mut prev_fb_id) =
+        import_current_capture_texture(&mut probe_session, &egl, display)?;
     log::info!(
-        "Successfully created EGL image from dma-buf! | Image handle: {:?}",
-        image.as_ptr()
+        "Imported EGLImage into GL texture {} from fb {}",
+        texture,
+        prev_fb_id
     );
-
-    let texture = egl_image_to_texture(&egl, image)?;
-    log::info!("Imported EGLImage into GL texture {}", texture);
     let _ = debug::debug_dump_texture_ppm(&egl, texture, w, h, "debug_output.ppm");
 
     let pipeline =
@@ -516,17 +576,14 @@ pub fn egl_main(card_path: &str) -> Result<(), EglError> {
         pipeline.render_with_cursor(NativeTexture(NonZero::new(texture).unwrap()), &cursor_state)
     }
     .map_err(EglError::Pipeline)?;
-
     unsafe {
         pipeline
             .gl
             .client_wait_sync(fence, glow::SYNC_FLUSH_COMMANDS_BIT, 1_000_000_000);
         pipeline.gl.delete_sync(fence);
     }
-    log::info!("GPU rendering complete and sync object cleaned up");
 
-    // IMPORTANT: update egl_dmabuf_export API to accept output texture id as `u32`.
-    let exported = unsafe {
+    let first_exported = unsafe {
         egl_dmabuf_export::export_rgba_tex_to_dmabuf(
             &egl,
             display,
@@ -540,20 +597,160 @@ pub fn egl_main(card_path: &str) -> Result<(), EglError> {
 
     log::info!(
         "Exported dmabuf: {}x{} fourcc=0x{:08x} planes={}",
-        exported.width,
-        exported.height,
-        exported.fourcc,
-        exported.fds.len()
+        first_exported.width,
+        first_exported.height,
+        first_exported.fourcc,
+        first_exported.fds.len()
     );
-    
-    let mut encoder = crate::drm_kms::encoder::GstEncoder::new("output.mp4", &exported, 60)
-        .map_err(|e| EglError::Pipeline(e.to_string()))?;
-    encoder.push_frame(&exported).map_err(|e| EglError::Pipeline(e.to_string()))?;
-    encoder.finish().map_err(|e| EglError::Pipeline(e.to_string()))?;
-    log::info!("Video encoding complete, output saved to output.mp4");
 
-    // Safe now: EGL already imported refs from input plane fds.
-    drop(plane_fds);
+    let fps: u32 = options.fps.max(1);
+    let frame_period = Duration::from_nanos(1_000_000_000u64 / fps as u64);
+    let dump_frames = options.dump_frames;
+    let dump_every = options.dump_every.max(1);
+    if dump_frames {
+        fs::create_dir_all(&options.dump_dir)
+            .map_err(|e| EglError::Pipeline(format!("failed to create dump dir: {e}")))?;
+    }
+
+    let mut encoder = match &options.output {
+        CaptureOutput::Preview => {
+        crate::drm_kms::encoder::GstEncoder::new_with_output(
+            crate::drm_kms::encoder::EncoderOutput::Preview,
+            &first_exported,
+            fps,
+        )
+        .map_err(|e| EglError::Pipeline(e.to_string()))?
+        }
+        CaptureOutput::File(path) => crate::drm_kms::encoder::GstEncoder::new(
+            &path.to_string_lossy(),
+            &first_exported,
+            fps,
+        )
+            .map_err(|e| EglError::Pipeline(e.to_string()))?
+    };
+
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    let pause_req = Arc::new(AtomicBool::new(false));
+    let resume_req = Arc::new(AtomicBool::new(false));
+    let paused = Arc::new(AtomicBool::new(false));
+    {
+        let stop_requested = Arc::clone(&stop_requested);
+        signal_flag::register(SIGINT, Arc::clone(&stop_requested))
+            .map_err(|e| EglError::Pipeline(format!("failed to register SIGINT: {e}")))?;
+        signal_flag::register(SIGTERM, stop_requested)
+            .map_err(|e| EglError::Pipeline(format!("failed to register SIGTERM: {e}")))?;
+    }
+    {
+        signal_flag::register(SIGUSR1, Arc::clone(&pause_req))
+            .map_err(|e| EglError::Pipeline(format!("failed to register SIGUSR1: {e}")))?;
+        signal_flag::register(SIGUSR2, Arc::clone(&resume_req))
+            .map_err(|e| EglError::Pipeline(format!("failed to register SIGUSR2: {e}")))?;
+    }
+
+    let mut next_deadline = Instant::now();
+    let mut frame_idx: u64 = 0;
+    encoder
+        .push_frame(&first_exported)
+        .map_err(|e| EglError::Pipeline(e.to_string()))?;
+    let _ = delete_gl_texture(&egl, texture);
+    frame_idx += 1;
+
+    while !stop_requested.load(Ordering::Relaxed) {
+        if pause_req.swap(false, Ordering::Relaxed) {
+            paused.store(true, Ordering::Relaxed);
+            log::info!("Recording paused (SIGUSR1)");
+        }
+        if resume_req.swap(false, Ordering::Relaxed) {
+            paused.store(false, Ordering::Relaxed);
+            log::info!("Recording resumed (SIGUSR2)");
+        }
+        if paused.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
+
+        let (frame_texture, frame_w, frame_h, fb_id) =
+            import_current_capture_texture(&mut probe_session, &egl, display)?;
+        if frame_w != w || frame_h != h {
+            let _ = delete_gl_texture(&egl, frame_texture);
+            return Err(EglError::Pipeline(format!(
+                "capture size changed from {}x{} to {}x{} during recording",
+                w, h, frame_w, frame_h
+            )));
+        }
+
+        let fence = unsafe {
+            pipeline.render_with_cursor(
+                NativeTexture(NonZero::new(frame_texture).unwrap()),
+                &cursor_state,
+            )
+        }
+        .map_err(EglError::Pipeline)?;
+
+        unsafe {
+            pipeline
+                .gl
+                .client_wait_sync(fence, glow::SYNC_FLUSH_COMMANDS_BIT, 1_000_000_000);
+            pipeline.gl.delete_sync(fence);
+        }
+
+        let exported = unsafe {
+            egl_dmabuf_export::export_rgba_tex_to_dmabuf(
+                &egl,
+                display,
+                context,
+                pipeline.output_texture().0.into(),
+                w,
+                h,
+            )
+        }
+        .map_err(EglError::Export)?;
+
+        encoder
+            .push_frame(&exported)
+            .map_err(|e| EglError::Pipeline(e.to_string()))?;
+        let _ = delete_gl_texture(&egl, frame_texture);
+        frame_idx += 1;
+
+        if dump_frames && frame_idx % dump_every as u64 == 0 {
+            let path = options
+                .dump_dir
+                .join(format!("debug_frame_{:06}.ppm", frame_idx));
+            let _ = debug::debug_dump_texture_ppm(
+                &egl,
+                pipeline.output_texture().0.into(),
+                w,
+                h,
+                &path.to_string_lossy(),
+            );
+            log::debug!("Dumped {}", path.to_string_lossy());
+        }
+
+        if fb_id != prev_fb_id {
+            log::debug!("frame {}: fb changed {} -> {}", frame_idx, prev_fb_id, fb_id);
+            prev_fb_id = fb_id;
+        } else {
+            log::trace!("frame {}: fb unchanged {}", frame_idx, fb_id);
+        }
+
+        if frame_idx % fps as u64 == 0 {
+            log::info!("Encoded frame {}", frame_idx);
+        }
+
+        next_deadline += frame_period;
+        let now = Instant::now();
+        if next_deadline > now {
+            thread::sleep(next_deadline - now);
+        }
+    }
+
+    encoder.finish().map_err(|e| EglError::Pipeline(e.to_string()))?;
+    match &options.output {
+        CaptureOutput::Preview => log::info!("Preview stopped"),
+        CaptureOutput::File(path) => {
+            log::info!("Video encoding complete, output saved to {}", path.to_string_lossy())
+        }
+    }
 
     Ok(())
 }
