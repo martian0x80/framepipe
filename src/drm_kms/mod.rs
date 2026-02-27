@@ -5,5 +5,5 @@ pub mod drm;
 pub(crate) mod debug;
 pub mod gpu_pipeline;
 pub mod egl_dmabuf_export;
-pub mod gstreamer_export;
+pub mod gstreamer;
 pub mod encoder;

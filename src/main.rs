@@ -4,6 +4,7 @@ use eyre::Result;
 use std::path::PathBuf;
 
 use crate::drm_kms::probe;
+use crate::drm_kms::types::{FrameRateMode, BitrateMode, ColorRange, CaptureOptions, CaptureOutput};
 
 mod drm_kms;
 
@@ -36,6 +37,7 @@ enum Commands {
     },
 }
 
+
 #[derive(Args, Debug, Clone)]
 struct CaptureArgs {
     #[arg(long)]
@@ -48,10 +50,18 @@ struct CaptureArgs {
     fps: u32,
     #[arg(long, default_value_t = false)]
     dump_frames: bool,
-    #[arg(long, default_value = "./openstudio-frames")]
+    #[arg(long, default_value = "./frames")]
     dump_dir: PathBuf,
     #[arg(long, default_value_t = 30)]
     dump_every: u32,
+    #[arg(long, default_value_t = 15000)]
+    bitrate_kbps: u32,
+    #[arg(long, default_value_t = FrameRateMode::Cfr)]
+    frame_rate_mode: FrameRateMode,
+    #[arg(long, default_value_t = BitrateMode::Cbr)]
+    bitrate_mode: BitrateMode,
+    #[arg(long, default_value_t = ColorRange::Limited)]
+    color_range: ColorRange,
 }
 
 fn resolve_card_path(card: Option<String>) -> Result<String> {
@@ -66,7 +76,7 @@ fn resolve_card_path(card: Option<String>) -> Result<String> {
 }
 
 fn main() -> Result<()> {
-    env_logger::builder().filter_level(log::LevelFilter::Debug).init();
+    env_logger::builder().format_timestamp_nanos().filter_level(log::LevelFilter::Debug).init();
     let cli = Cli::parse();
 
     match cli.command {
@@ -79,7 +89,7 @@ fn main() -> Result<()> {
         }
         Commands::Record { capture, output } => {
             let card_path = resolve_card_path(capture.card)?;
-            let opts = drm_kms::egl::CaptureOptions {
+            let opts = CaptureOptions {
                 card_path,
                 connector: capture.connector,
                 allow_fallback_connector: capture.allow_fallback_connector,
@@ -87,13 +97,17 @@ fn main() -> Result<()> {
                 dump_frames: capture.dump_frames,
                 dump_dir: capture.dump_dir,
                 dump_every: capture.dump_every,
-                output: drm_kms::egl::CaptureOutput::File(output),
+                output: CaptureOutput::File(output),
+                bitrate_kbps: capture.bitrate_kbps,
+                frame_rate_mode: capture.frame_rate_mode,
+                bitrate_mode: capture.bitrate_mode,
+                color_range: capture.color_range,
             };
             drm_kms::egl::egl_main(opts)?;
         }
         Commands::Preview { capture } => {
             let card_path = resolve_card_path(capture.card)?;
-            let opts = drm_kms::egl::CaptureOptions {
+            let opts = CaptureOptions {
                 card_path,
                 connector: capture.connector,
                 allow_fallback_connector: capture.allow_fallback_connector,
@@ -101,7 +115,11 @@ fn main() -> Result<()> {
                 dump_frames: capture.dump_frames,
                 dump_dir: capture.dump_dir,
                 dump_every: capture.dump_every,
-                output: drm_kms::egl::CaptureOutput::Preview,
+                output: CaptureOutput::Preview,
+                bitrate_kbps: capture.bitrate_kbps,
+                frame_rate_mode: capture.frame_rate_mode,
+                bitrate_mode: capture.bitrate_mode,
+                color_range: capture.color_range,
             };
             drm_kms::egl::egl_main(opts)?;
         }

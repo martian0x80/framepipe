@@ -36,6 +36,7 @@ pub fn push_exported_dmabuf(
     appsrc: &gst_app::AppSrc,
     ex: &ExportedDmabuf, // your struct: fds/offsets/strides/fourcc/modifier/pts
     pts_ns: u64,
+    duration_ns: Option<u64>,
 ) -> Result<(), ExportError> {
     // 1) Create empty buffer
     let mut buffer = gst::Buffer::new();
@@ -75,7 +76,10 @@ pub fn push_exported_dmabuf(
 
         buf.set_pts(gst::ClockTime::from_nseconds(pts_ns));
         buf.set_dts(gst::ClockTime::from_nseconds(pts_ns));
-        buf.set_duration(gst::ClockTime::from_nseconds(16_666_667)); // 60fps
+        match duration_ns {
+            Some(ns) => buf.set_duration(gst::ClockTime::from_nseconds(ns)),
+            None => buf.set_duration(gst::ClockTime::NONE),
+        }
     }
 
     appsrc

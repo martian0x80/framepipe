@@ -2,7 +2,7 @@
 // wow this was probably most awful part of the codebase to write
 // i am just too dumb for this
 
-use gbm::{AsRaw, BufferObjectFlags, Device, Format};
+use gbm::{AsRaw};
 use glow::{HasContext, NativeTexture};
 use signal_hook::consts::signal::{SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
 use signal_hook::flag as signal_flag;
@@ -10,8 +10,6 @@ use std::{
     fs,
     num::NonZero,
     os::fd::{AsFd, AsRawFd},
-    path::PathBuf,
-    rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -25,7 +23,7 @@ use crate::drm_kms::{
     drm::{DrmInitError, init_drm_device},
     egl_dmabuf_export, gpu_pipeline,
     probe::ProbeSession,
-    types::{Card, ProbeResult},
+    types::{Card, ProbeResult, CaptureOptions, CaptureOutput},
 };
 extern crate khronos_egl;
 
@@ -62,24 +60,6 @@ const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
 pub enum EglBackend {
     Gbm,
     Surfaceless,
-}
-
-#[derive(Debug, Clone)]
-pub enum CaptureOutput {
-    File(PathBuf),
-    Preview,
-}
-
-#[derive(Debug, Clone)]
-pub struct CaptureOptions {
-    pub card_path: String,
-    pub connector: Option<String>,
-    pub allow_fallback_connector: bool,
-    pub fps: u32,
-    pub dump_frames: bool,
-    pub dump_dir: PathBuf,
-    pub dump_every: u32,
-    pub output: CaptureOutput,
 }
 
 #[derive(Debug)]
@@ -558,10 +538,14 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
         texture,
         prev_fb_id
     );
-    let _ = debug::debug_dump_texture_ppm(&egl, texture, w, h, "debug_output.ppm");
+    // let _ = debug::debug_dump_texture_ppm(&egl, texture, w, h, "debug_output.ppm");
 
-    let pipeline =
-        unsafe { gpu_pipeline::GpuPipeline::new(&egl, w, h) }.map_err(EglError::Pipeline)?;
+    let mut pipelines: Vec<gpu_pipeline::GpuPipeline> = Vec::with_capacity(3);
+    for _ in 0..3 {
+        pipelines.push(
+            unsafe { gpu_pipeline::GpuPipeline::new(&egl, w, h) }.map_err(EglError::Pipeline)?,
+        );
+    }
 
     // no cursor yet
     let cursor_state = gpu_pipeline::CursorState {
@@ -572,15 +556,17 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
         h: 0.0,
     };
 
+    let first_slot = 0usize;
     let fence = unsafe {
-        pipeline.render_with_cursor(NativeTexture(NonZero::new(texture).unwrap()), &cursor_state)
+        pipelines[first_slot]
+            .render_with_cursor(NativeTexture(NonZero::new(texture).unwrap()), &cursor_state)
     }
     .map_err(EglError::Pipeline)?;
     unsafe {
-        pipeline
+        pipelines[first_slot]
             .gl
             .client_wait_sync(fence, glow::SYNC_FLUSH_COMMANDS_BIT, 1_000_000_000);
-        pipeline.gl.delete_sync(fence);
+        pipelines[first_slot].gl.delete_sync(fence);
     }
 
     let first_exported = unsafe {
@@ -588,7 +574,7 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
             &egl,
             display,
             context,
-            pipeline.output_texture().0.into(),
+            pipelines[first_slot].output_texture().0.into(),
             w,
             h,
         )
@@ -604,6 +590,13 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
     );
 
     let fps: u32 = options.fps.max(1);
+    let enc_opts = crate::drm_kms::encoder::EncoderOptions {
+        fps,
+        bitrate_kbps: options.bitrate_kbps,
+        frame_rate_mode: options.frame_rate_mode,
+        bitrate_mode: options.bitrate_mode,
+        color_range: options.color_range,
+    };
     let frame_period = Duration::from_nanos(1_000_000_000u64 / fps as u64);
     let dump_frames = options.dump_frames;
     let dump_every = options.dump_every.max(1);
@@ -617,14 +610,14 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
         crate::drm_kms::encoder::GstEncoder::new_with_output(
             crate::drm_kms::encoder::EncoderOutput::Preview,
             &first_exported,
-            fps,
+            enc_opts.clone(),
         )
         .map_err(|e| EglError::Pipeline(e.to_string()))?
         }
         CaptureOutput::File(path) => crate::drm_kms::encoder::GstEncoder::new(
             &path.to_string_lossy(),
             &first_exported,
-            fps,
+            enc_opts.clone(),
         )
             .map_err(|e| EglError::Pipeline(e.to_string()))?
     };
@@ -665,7 +658,7 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
             log::info!("Recording resumed (SIGUSR2)");
         }
         if paused.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(100));
             continue;
         }
 
@@ -679,8 +672,9 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
             )));
         }
 
+        let slot = (frame_idx as usize) % pipelines.len();
         let fence = unsafe {
-            pipeline.render_with_cursor(
+            pipelines[slot].render_with_cursor(
                 NativeTexture(NonZero::new(frame_texture).unwrap()),
                 &cursor_state,
             )
@@ -688,10 +682,10 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
         .map_err(EglError::Pipeline)?;
 
         unsafe {
-            pipeline
+            pipelines[slot]
                 .gl
                 .client_wait_sync(fence, glow::SYNC_FLUSH_COMMANDS_BIT, 1_000_000_000);
-            pipeline.gl.delete_sync(fence);
+            pipelines[slot].gl.delete_sync(fence);
         }
 
         let exported = unsafe {
@@ -699,7 +693,7 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
                 &egl,
                 display,
                 context,
-                pipeline.output_texture().0.into(),
+                pipelines[slot].output_texture().0.into(),
                 w,
                 h,
             )
@@ -718,7 +712,7 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
                 .join(format!("debug_frame_{:06}.ppm", frame_idx));
             let _ = debug::debug_dump_texture_ppm(
                 &egl,
-                pipeline.output_texture().0.into(),
+                pipelines[slot].output_texture().0.into(),
                 w,
                 h,
                 &path.to_string_lossy(),
@@ -733,9 +727,7 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
             log::trace!("frame {}: fb unchanged {}", frame_idx, fb_id);
         }
 
-        if frame_idx % fps as u64 == 0 {
-            log::info!("Encoded frame {}", frame_idx);
-        }
+        log::debug!("Captured frame {} (fb {})", frame_idx, fb_id);
 
         next_deadline += frame_period;
         let now = Instant::now();

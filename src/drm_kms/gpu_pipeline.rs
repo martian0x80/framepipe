@@ -165,21 +165,21 @@ impl GpuPipeline {
     ) -> Result<glow::NativeFence, String> {
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
-            log::debug!("Framebuffer bound for rendering");
+            log::trace!("Framebuffer bound for rendering");
             self.gl.viewport(0, 0, self.out_w, self.out_h);
-            log::debug!(
+            log::trace!(
                 "Viewport set to output texture size: {}x{}",
                 self.out_w,
                 self.out_h
             );
             self.gl.use_program(Some(self.prog));
-            log::debug!("Shader program in use for rendering");
+            log::trace!("Shader program in use for rendering");
 
             self.gl.active_texture(glow::TEXTURE0);
             self.gl.bind_texture(glow::TEXTURE_2D, Some(src_tex));
             self.gl
                 .uniform_1_i32(self.gl.get_uniform_location(self.prog, "u_src").as_ref(), 0);
-            log::debug!("Source texture bound and uniform set");
+            log::trace!("Source texture bound and uniform set");
 
             let has_cursor = cursor.tex.is_some() as i32;
             self.gl.uniform_1_i32(
@@ -223,7 +223,7 @@ impl GpuPipeline {
                 .fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0)
                 .map_err(|e| e.to_string())?;
             self.gl.flush();
-            log::debug!("Rendering complete, GL fence created and flushed");
+            log::trace!("Rendering complete, GL fence created and flushed");
 
             Ok(fence)
         }

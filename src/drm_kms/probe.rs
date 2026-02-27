@@ -3,6 +3,7 @@ use drm::ClientCapability::{UniversalPlanes, Atomic};
 use drm::Device as BasicDevice;
 use drm::CLOEXEC;
 use std::collections::BinaryHeap;
+use std::collections::HashMap;
 use std::os::fd::OwnedFd;
 
 use crate::drm_kms::drm::{DrmInitError, init_drm_device};
@@ -180,7 +181,7 @@ fn get_best_capture_plane(
     }
 
     if let Some((area, zpos, plane)) = best {
-        log::debug!(
+        log::trace!(
             "Selected capture plane {:?} (area={}, zpos={}, fb={:?})",
             plane.handle(),
             area,
@@ -206,6 +207,7 @@ pub struct ProbeSession {
     selected_connector: Option<connector::Handle>,
     selected_connector_name: Option<String>,
     plane_handles: Vec<plane::Handle>,
+    last_fb_by_plane: HashMap<plane::Handle, u32>,
 }
 
 impl ProbeSession {
@@ -228,6 +230,7 @@ impl ProbeSession {
             selected_connector: None,
             selected_connector_name: None,
             plane_handles: Vec::new(),
+            last_fb_by_plane: HashMap::new(),
         };
         session.refresh_selection()?;
         Ok(session)
@@ -285,7 +288,32 @@ impl ProbeSession {
             return self.capture_frame();
         }
 
-        let capture_plane = match get_best_capture_plane(card, &infos) {
+        let mut changed_infos = Vec::new();
+        for info in &infos {
+            if let Some(fb) = info.framebuffer() {
+                let fb_id: u32 = fb.into();
+                if self
+                    .last_fb_by_plane
+                    .get(&info.handle())
+                    .copied()
+                    .is_none_or(|prev| prev != fb_id)
+                {
+                    changed_infos.push(info.clone());
+                }
+            }
+        }
+
+        let candidate_infos = if changed_infos.is_empty() {
+            &infos
+        } else {
+            log::trace!(
+                "Detected {} plane(s) with changed FB_ID; prioritizing those",
+                changed_infos.len()
+            );
+            &changed_infos
+        };
+
+        let capture_plane = match get_best_capture_plane(card, candidate_infos) {
             Ok(p) => p,
             Err(e) => {
                 if self.allow_fallback_connector {
@@ -321,6 +349,11 @@ impl ProbeSession {
         }
 
         let fb_id: u32 = fb.into();
+        for info in &infos {
+            if let Some(fb) = info.framebuffer() {
+                self.last_fb_by_plane.insert(info.handle(), fb.into());
+            }
+        }
         Ok(types::ProbeResult {
             fb_id,
             fb_info,

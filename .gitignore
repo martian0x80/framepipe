@@ -4,3 +4,5 @@ target
 *.md
 *.pdf
 openstudio-frames
+*.mp4
+*.ppm
