@@ -64,6 +64,7 @@ pub unsafe fn export_rgba_tex_to_dmabuf(
             &mut modifier,
         ) == 0
         {
+            let _ = egl.destroy_image(display, image);
             return Err("eglExportDMABUFImageQueryMESA failed".into());
         }
 
@@ -78,6 +79,7 @@ pub unsafe fn export_rgba_tex_to_dmabuf(
             offsets.as_mut_ptr(),
         ) == 0
         {
+            let _ = egl.destroy_image(display, image);
             return Err("eglExportDMABUFImageMESA failed".into());
         }
 
@@ -85,6 +87,9 @@ pub unsafe fn export_rgba_tex_to_dmabuf(
             .into_iter()
             .map(|fd| OwnedFd::from_raw_fd(fd))
             .collect::<Vec<_>>();
+
+        egl.destroy_image(display, image)
+            .map_err(|e| format!("DestroyImageKHR failed: {e:?}"))?;
 
         Ok(crate::drm_kms::types::ExportedDmabuf {
             width,

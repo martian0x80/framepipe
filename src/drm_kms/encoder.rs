@@ -73,6 +73,22 @@ fn fourcc_to_raw_format(fourcc: u32) -> Option<&'static str> {
     }
 }
 
+fn quality_bpp_floor(mode: &BitrateMode) -> f64 {
+    // High-quality floors for desktop capture with H.264.
+    // High resolutions/high FPS need far more bits/frame than camera footage.
+    match mode {
+        BitrateMode::Vbr => 0.50,
+        BitrateMode::Cbr => 0.70,
+    }
+}
+
+fn auto_bitrate_floor_kbps(width: i32, height: i32, fps: u32, mode: &BitrateMode) -> u32 {
+    let pixels_per_sec = (width.max(1) as f64) * (height.max(1) as f64) * (fps.max(1) as f64);
+    let bits_per_sec = pixels_per_sec * quality_bpp_floor(mode);
+    // Keep sane lower bound for low-res streams.
+    ((bits_per_sec / 1000.0).ceil() as u32).max(25_000)
+}
+
 fn set_appsrc_caps(
     appsrc: &gst_app::AppSrc,
     ex: &ExportedDmabuf,
@@ -160,8 +176,27 @@ impl GstEncoder {
     ) -> Result<Self, EncodeError> {
         gst::init()?;
         let fps = options.fps.max(1);
-        let bitrate = options.bitrate_kbps.max(1);
+        let auto_floor = auto_bitrate_floor_kbps(ex.width, ex.height, fps, &options.bitrate_mode);
+        let requested = options.bitrate_kbps.max(1);
+        let bitrate = requested.max(auto_floor);
         let rate_control = &options.bitrate_mode.to_string();
+        let enc_quality_props = match options.bitrate_mode {
+            // High-quality constrained VBR tuned for desktop capture.
+            BitrateMode::Vbr => "target-usage=1 target-percentage=95 min-qp=1 max-qp=35 qpi=18",
+            // Tight CBR with bounded QP so quality does not collapse.
+            BitrateMode::Cbr => "target-usage=1 min-qp=1 max-qp=30 qpi=20",
+        };
+        if bitrate > requested {
+            log::warn!(
+                "Raising bitrate from {} to {} kbps to avoid quality collapse at {}x{}@{} ({:?})",
+                requested,
+                bitrate,
+                ex.width,
+                ex.height,
+                fps,
+                options.bitrate_mode
+            );
+        }
 
         let desc = match output {
             EncoderOutput::File(out_path) => format!(
@@ -169,8 +204,8 @@ impl GstEncoder {
                     "appsrc name=src is-live=true format=time do-timestamp=false block=true ",
                     "! queue ",
                     "! vapostproc ",
-                    "! video/x-raw(memory:VAMemory),format=NV12 ",
-                    "! vah264enc rate-control={rate_control} bitrate={bitrate} key-int-max={gop} ",
+                    "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1 ",
+                    "! vah264enc name=enc rate-control={rate_control} bitrate={bitrate} key-int-max={gop} b-frames=0 cabac=true dct8x8=true trellis=false cpb-size=0 {enc_quality_props} ",
                     "! h264parse ",
                     "! mp4mux faststart=true ",
                     "! filesink location={out}"
@@ -178,17 +213,31 @@ impl GstEncoder {
                 rate_control = rate_control,
                 bitrate = bitrate,
                 gop = fps * 2,
+                enc_quality_props = enc_quality_props,
+                w = ex.width.max(1),
+                h = ex.height.max(1),
+                fps = fps,
                 out = out_path
             ),
-            EncoderOutput::Preview => String::from(
+            EncoderOutput::Preview => format!(
                 concat!(
                     "appsrc name=src is-live=true format=time do-timestamp=false block=true ",
                     "! queue ",
                     "! vapostproc ",
-                    "! video/x-raw,format=BGRA ",
+                    "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1 ",
+                    "! vah264enc name=enc rate-control={rate_control} bitrate={bitrate} key-int-max={gop} b-frames=0 cabac=true dct8x8=true trellis=false cpb-size=0 {enc_quality_props} ",
+                    "! h264parse ",
+                    "! avdec_h264 ",
                     "! videoconvert ",
                     "! autovideosink sync=false"
                 ),
+                rate_control = rate_control,
+                bitrate = bitrate,
+                gop = fps * 2,
+                enc_quality_props = enc_quality_props,
+                w = ex.width.max(1),
+                h = ex.height.max(1),
+                fps = fps,
             ),
         };
         log::debug!("GStreamer pipeline: {desc}");
@@ -206,12 +255,28 @@ impl GstEncoder {
 
         set_appsrc_caps(&appsrc, ex, &options).map_err(EncodeError::Bus)?;
 
-        appsrc.set_max_bytes(0); // unlimited buffering
+        appsrc.set_max_bytes(0);
+        appsrc.set_property("max-buffers", 6u64);
+        appsrc.set_property("max-time", 1_000_000_000u64);
         appsrc.set_block(true);
 
         pipeline
             .set_state(gst::State::Playing)
             .map_err(|e| EncodeError::Bus(format!("failed to set Playing: {e:?}")))?;
+
+        if let Some(enc) = pipeline.by_name("enc") {
+            let rate = enc.property_value("rate-control");
+            let br = enc.property_value("bitrate");
+            log::info!(
+                "Encoder properties after start: rate-control={:?} bitrate={:?}",
+                rate,
+                br
+            );
+            if let Some(sink_pad) = enc.static_pad("sink") {
+                let caps = sink_pad.current_caps();
+                log::info!("Encoder sink negotiated caps: {:?}", caps);
+            }
+        }
 
         Ok(Self {
             pipeline,

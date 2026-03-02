@@ -103,6 +103,8 @@ pub struct CaptureOptions {
     pub connector: Option<String>,
     pub allow_fallback_connector: bool,
     pub fps: u32,
+    pub output_width: Option<u32>,
+    pub output_height: Option<u32>,
     pub dump_frames: bool,
     pub dump_dir: PathBuf,
     pub dump_every: u32,

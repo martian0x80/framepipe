@@ -48,6 +48,10 @@ struct CaptureArgs {
     allow_fallback_connector: bool,
     #[arg(long, default_value_t = 60)]
     fps: u32,
+    #[arg(long)]
+    output_width: Option<u32>,
+    #[arg(long)]
+    output_height: Option<u32>,
     #[arg(long, default_value_t = false)]
     dump_frames: bool,
     #[arg(long, default_value = "./frames")]
@@ -56,11 +60,11 @@ struct CaptureArgs {
     dump_every: u32,
     #[arg(long, default_value_t = 15000)]
     bitrate_kbps: u32,
-    #[arg(long, default_value_t = FrameRateMode::Cfr)]
+    #[arg(short = 'f', long, default_value_t = FrameRateMode::Cfr)]
     frame_rate_mode: FrameRateMode,
-    #[arg(long, default_value_t = BitrateMode::Cbr)]
+    #[arg(short = 'b', long, default_value_t = BitrateMode::Cbr)]
     bitrate_mode: BitrateMode,
-    #[arg(long, default_value_t = ColorRange::Limited)]
+    #[arg(short = 'c', long, default_value_t = ColorRange::Full)]
     color_range: ColorRange,
 }
 
@@ -88,12 +92,19 @@ fn main() -> Result<()> {
             }
         }
         Commands::Record { capture, output } => {
+            if capture.output_width.is_some() != capture.output_height.is_some() {
+                return Err(eyre::eyre!(
+                    "both --output-width and --output-height must be set together"
+                ));
+            }
             let card_path = resolve_card_path(capture.card)?;
             let opts = CaptureOptions {
                 card_path,
                 connector: capture.connector,
                 allow_fallback_connector: capture.allow_fallback_connector,
                 fps: capture.fps,
+                output_width: capture.output_width,
+                output_height: capture.output_height,
                 dump_frames: capture.dump_frames,
                 dump_dir: capture.dump_dir,
                 dump_every: capture.dump_every,
@@ -106,12 +117,19 @@ fn main() -> Result<()> {
             drm_kms::egl::egl_main(opts)?;
         }
         Commands::Preview { capture } => {
+            if capture.output_width.is_some() != capture.output_height.is_some() {
+                return Err(eyre::eyre!(
+                    "both --output-width and --output-height must be set together"
+                ));
+            }
             let card_path = resolve_card_path(capture.card)?;
             let opts = CaptureOptions {
                 card_path,
                 connector: capture.connector,
                 allow_fallback_connector: capture.allow_fallback_connector,
                 fps: capture.fps,
+                output_width: capture.output_width,
+                output_height: capture.output_height,
                 dump_frames: capture.dump_frames,
                 dump_dir: capture.dump_dir,
                 dump_every: capture.dump_every,

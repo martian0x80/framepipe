@@ -513,6 +513,10 @@ fn import_current_capture_texture(
     .map_err(EglError::CreateImage)?;
 
     let texture = egl_image_to_texture(egl, image)?;
+    unsafe {
+        egl.destroy_image(display, image)
+            .map_err(EglError::CreateImage)?;
+    }
     Ok((texture, w, h, fb_id))
 }
 
@@ -531,8 +535,25 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
         options.allow_fallback_connector,
     )
     .map_err(EglError::Probe)?;
-    let (texture, w, h, mut prev_fb_id) =
+    let (texture, source_w, source_h, mut prev_fb_id) =
         import_current_capture_texture(&mut probe_session, &egl, display)?;
+    let output_w = options
+        .output_width
+        .map(|v| v.max(1) as i32)
+        .unwrap_or(source_w);
+    let output_h = options
+        .output_height
+        .map(|v| v.max(1) as i32)
+        .unwrap_or(source_h);
+    if output_w != source_w || output_h != source_h {
+        log::info!(
+            "Scaling output from {}x{} to {}x{}",
+            source_w,
+            source_h,
+            output_w,
+            output_h
+        );
+    }
     log::info!(
         "Imported EGLImage into GL texture {} from fb {}",
         texture,
@@ -542,9 +563,8 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
 
     let mut pipelines: Vec<gpu_pipeline::GpuPipeline> = Vec::with_capacity(3);
     for _ in 0..3 {
-        pipelines.push(
-            unsafe { gpu_pipeline::GpuPipeline::new(&egl, w, h) }.map_err(EglError::Pipeline)?,
-        );
+        pipelines.push(unsafe { gpu_pipeline::GpuPipeline::new(&egl, output_w, output_h) }
+            .map_err(EglError::Pipeline)?);
     }
 
     // no cursor yet
@@ -575,8 +595,8 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
             display,
             context,
             pipelines[first_slot].output_texture().0.into(),
-            w,
-            h,
+            output_w,
+            output_h,
         )
     }
     .map_err(EglError::Export)?;
@@ -664,11 +684,11 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
 
         let (frame_texture, frame_w, frame_h, fb_id) =
             import_current_capture_texture(&mut probe_session, &egl, display)?;
-        if frame_w != w || frame_h != h {
+        if frame_w != source_w || frame_h != source_h {
             let _ = delete_gl_texture(&egl, frame_texture);
             return Err(EglError::Pipeline(format!(
                 "capture size changed from {}x{} to {}x{} during recording",
-                w, h, frame_w, frame_h
+                source_w, source_h, frame_w, frame_h
             )));
         }
 
@@ -694,8 +714,8 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
                 display,
                 context,
                 pipelines[slot].output_texture().0.into(),
-                w,
-                h,
+                output_w,
+                output_h,
             )
         }
         .map_err(EglError::Export)?;
@@ -713,8 +733,8 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
             let _ = debug::debug_dump_texture_ppm(
                 &egl,
                 pipelines[slot].output_texture().0.into(),
-                w,
-                h,
+                output_w,
+                output_h,
                 &path.to_string_lossy(),
             );
             log::debug!("Dumped {}", path.to_string_lossy());
