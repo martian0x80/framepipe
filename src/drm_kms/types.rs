@@ -111,6 +111,23 @@ impl ToString for ColorRange {
     }
 }
 
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum Colorimetry {
+    Bt601,
+    Bt709,
+    Bt2020,
+}
+
+impl ToString for Colorimetry {
+    fn to_string(&self) -> String {
+        match self {
+            Colorimetry::Bt601 => "bt601".to_string(),
+            Colorimetry::Bt709 => "bt709".to_string(),
+            Colorimetry::Bt2020 => "bt2020".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, clap::ValueEnum, PartialEq, Eq)]
 pub enum EncoderBackend {
     Vaapi,
@@ -167,6 +184,7 @@ pub struct CaptureOptions {
     pub frame_rate_mode: FrameRateMode,
     pub bitrate_mode: BitrateMode,
     pub color_range: ColorRange,
+    pub colorimetry: Colorimetry,
     pub encoder_backend: EncoderBackend,
     pub video_codec: VideoCodec,
 }

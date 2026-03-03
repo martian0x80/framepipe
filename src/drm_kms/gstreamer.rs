@@ -10,6 +10,8 @@ use crate::drm_kms::types::ExportedDmabuf;
 pub enum ExportError {
     #[error("Failed to create DMABuf memory: {0}")]
     DmaBufAllocation(String),
+    #[error("Invalid DMABuf layout: {0}")]
+    InvalidLayout(String),
     #[error("Failed to add VideoMeta: {0}")]
     VideoMeta(String),
     #[error("Failed to push buffer to AppSrc: {0}")]
@@ -38,6 +40,40 @@ pub fn push_exported_dmabuf(
     pts_ns: u64,
     duration_ns: Option<u64>,
 ) -> Result<(), ExportError> {
+    if ex.fds.is_empty() {
+        return Err(ExportError::InvalidLayout(
+            "exported dmabuf has zero planes".to_string(),
+        ));
+    }
+    if ex.strides.len() != ex.fds.len() || ex.offsets.len() != ex.fds.len() {
+        return Err(ExportError::InvalidLayout(format!(
+            "planes/strides/offsets mismatch: planes={} strides={} offsets={}",
+            ex.fds.len(),
+            ex.strides.len(),
+            ex.offsets.len()
+        )));
+    }
+    for i in 0..ex.fds.len() {
+        if ex.strides[i] <= 0 {
+            return Err(ExportError::InvalidLayout(format!(
+                "invalid stride {} on plane {}",
+                ex.strides[i], i
+            )));
+        }
+        if ex.offsets[i] < 0 {
+            return Err(ExportError::InvalidLayout(format!(
+                "invalid offset {} on plane {}",
+                ex.offsets[i], i
+            )));
+        }
+        log::trace!(
+            "push dmabuf plane {}: stride={} offset={}",
+            i,
+            ex.strides[i],
+            ex.offsets[i]
+        );
+    }
+
     // 1) Create empty buffer
     let mut buffer = gst::Buffer::new();
 

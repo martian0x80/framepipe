@@ -83,6 +83,36 @@ pub unsafe fn export_rgba_tex_to_dmabuf(
             return Err("eglExportDMABUFImageMESA failed".into());
         }
 
+        if nplanes <= 0 {
+            let _ = egl.destroy_image(display, image);
+            return Err("eglExportDMABUFImageQueryMESA returned no planes".into());
+        }
+        if strides.len() != nplanes as usize || offsets.len() != nplanes as usize {
+            let _ = egl.destroy_image(display, image);
+            return Err("dmabuf layout vectors do not match reported plane count".into());
+        }
+        for i in 0..(nplanes as usize) {
+            if fds[i] < 0 {
+                let _ = egl.destroy_image(display, image);
+                return Err(format!("invalid fd for exported plane {}", i));
+            }
+            if strides[i] <= 0 {
+                let _ = egl.destroy_image(display, image);
+                return Err(format!("invalid stride {} for plane {}", strides[i], i));
+            }
+            if offsets[i] < 0 {
+                let _ = egl.destroy_image(display, image);
+                return Err(format!("invalid offset {} for plane {}", offsets[i], i));
+            }
+            log::trace!(
+                "exported plane {}: fd={} stride={} offset={}",
+                i,
+                fds[i],
+                strides[i],
+                offsets[i]
+            );
+        }
+
         let owned = fds
             .into_iter()
             .map(|fd| OwnedFd::from_raw_fd(fd))

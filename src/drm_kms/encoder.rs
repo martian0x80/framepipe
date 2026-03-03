@@ -8,7 +8,8 @@ use gstreamer_app as gst_app;
 
 use crate::drm_kms::gstreamer::{ExportError, push_exported_dmabuf};
 use crate::drm_kms::types::{
-    BitrateMode, ColorRange, EncoderBackend, ExportedDmabuf, FrameRateMode, VideoCodec,
+    BitrateMode, ColorRange, Colorimetry, EncoderBackend, ExportedDmabuf, FrameRateMode,
+    VideoCodec,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +49,7 @@ pub struct EncoderOptions {
     pub frame_rate_mode: FrameRateMode,
     pub bitrate_mode: BitrateMode,
     pub color_range: ColorRange,
+    pub colorimetry: Colorimetry,
     pub encoder_backend: EncoderBackend,
     pub video_codec: VideoCodec,
 }
@@ -148,14 +150,14 @@ fn set_appsrc_caps(
         .ok_or_else(|| format!("unsupported fourcc 0x{:08x}", ex.fourcc))?;
     let fps = opts.fps.max(1);
     let range = &opts.color_range.to_string();
-    let colorimetry = "bt709";
+    let colorimetry = opts.colorimetry.to_string();
 
     // Some drivers expose DMA_DRM AB24 only for specific non-linear modifiers.
     // If exporter gives linear modifier (0), prefer plain raw caps for compatibility.
     if ex.modifier == 0 {
         let raw_fallback = format!(
             "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
-            raw, ex.width, ex.height, fps, range, colorimetry
+            raw, ex.width, ex.height, fps, range, colorimetry.as_str()
         );
         if let Ok(caps) = gst::Caps::from_str(&raw_fallback) {
             log::debug!("Using appsrc caps (linear modifier fallback): {raw_fallback}");
@@ -168,7 +170,7 @@ fn set_appsrc_caps(
         let drm_with_mod = format!("{drm}:0x{:016x}", ex.modifier);
         let full_with_mod = format!(
             "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
-            drm_with_mod, ex.width, ex.height, fps, range, colorimetry
+            drm_with_mod, ex.width, ex.height, fps, range, colorimetry.as_str()
         );
         match gst::Caps::from_str(&full_with_mod) {
             Ok(caps) => {
@@ -183,7 +185,7 @@ fn set_appsrc_caps(
 
         let full = format!(
             "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
-            drm, ex.width, ex.height, fps, range, colorimetry
+            drm, ex.width, ex.height, fps, range, colorimetry.as_str()
         );
         match gst::Caps::from_str(&full) {
             Ok(caps) => {
@@ -199,7 +201,7 @@ fn set_appsrc_caps(
 
     let dmabuf_raw = format!(
         "video/x-raw(memory:DMABuf),format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
-        raw, ex.width, ex.height, fps, range, colorimetry
+        raw, ex.width, ex.height, fps, range, colorimetry.as_str()
     );
     if let Ok(caps) = gst::Caps::from_str(&dmabuf_raw) {
         log::debug!("Using appsrc caps: {dmabuf_raw}");
@@ -209,7 +211,7 @@ fn set_appsrc_caps(
 
     let raw_fallback = format!(
         "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
-        raw, ex.width, ex.height, fps, range, colorimetry
+        raw, ex.width, ex.height, fps, range, colorimetry.as_str()
     );
     let caps = gst::Caps::from_str(&raw_fallback)
         .map_err(|e| format!("fallback caps parse failed: {e}"))?;
@@ -316,6 +318,7 @@ impl GstEncoder {
                 options.bitrate_mode
             );
         }
+        let colorimetry = options.colorimetry.to_string();
 
         let w = ex.width.max(1);
         let h = ex.height.max(1);
@@ -347,16 +350,16 @@ impl GstEncoder {
                 let vaapi_rc_quality_props = match options.bitrate_mode {
                     BitrateMode::Cbr => "target-usage=1 min-qp=1 max-qp=24 qpi=16",
                     BitrateMode::Vbr | BitrateMode::Qvbr => {
-                        "target-usage=1 target-percentage=100 min-qp=1 max-qp=26 qpi=16"
+                        "target-usage=1 target-percentage=100 min-qp=1 max-qp=20 qpi=16"
                     }
-                    BitrateMode::Icq => "target-usage=2 min-qp=1 max-qp=24 qpi=16",
+                    BitrateMode::Icq => "target-usage=1 min-qp=1 max-qp=24 qpi=14",
                     BitrateMode::Cqp => "min-qp=1 max-qp=24 qpi=16",
                     _ => "",
                 };
                 format!(
                     concat!(
                         "! vapostproc ",
-                        "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string)bt709 ",
+                        "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
                         "! {enc} name=enc rate-control={rc} bitrate={bitrate} key-int-max={gop} {vaapi_rc_quality_props} ",
                         "! {parser} "
                     ),
@@ -364,6 +367,7 @@ impl GstEncoder {
                     h = h,
                     fps = fps,
                     range = range,
+                    colorimetry = colorimetry,
                     enc = enc,
                     rc = rc,
                     bitrate = bitrate,
@@ -381,7 +385,7 @@ impl GstEncoder {
                     concat!(
                         "! vulkanupload ",
                         "! vulkancolorconvert ",
-                        "! video/x-raw(memory:VulkanImage),format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string)bt709 ",
+                        "! video/x-raw(memory:VulkanImage),format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
                         "! {enc} name=enc rate-control={rc} bitrate={bitrate} quality=5 min-qp=1 max-qp=30 ",
                         "! {parser} "
                     ),
@@ -389,6 +393,7 @@ impl GstEncoder {
                     h = h,
                     fps = fps,
                     range = range,
+                    colorimetry = colorimetry,
                     enc = enc,
                     rc = rc,
                     bitrate = bitrate,
@@ -407,7 +412,7 @@ impl GstEncoder {
                         concat!(
                             "! videoconvert ",
                             "! videorate ",
-                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string)bt709 ",
+                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
                             "! {enc} name=enc bitrate={bitrate} pass={pass} speed-preset=veryfast tune=zerolatency key-int-max={gop} bframes=0 cabac=true rc-lookahead=0 sync-lookahead=0 threads=0 sliced-threads=true ",
                             "! h264parse "
                         ),
@@ -415,6 +420,7 @@ impl GstEncoder {
                         h = h,
                         fps = fps,
                         range = options.color_range.to_string(),
+                        colorimetry = colorimetry,
                         enc = enc,
                         bitrate = bitrate,
                         pass = rc,
@@ -424,7 +430,7 @@ impl GstEncoder {
                         concat!(
                             "! videoconvert ",
                             "! videorate ",
-                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string)bt709 ",
+                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
                             "! {enc} name=enc bitrate={bitrate} speed-preset=veryfast key-int-max={gop} ",
                             "! h265parse "
                         ),
@@ -432,6 +438,7 @@ impl GstEncoder {
                         h = h,
                         fps = fps,
                         range = options.color_range.to_string(),
+                        colorimetry = colorimetry,
                         enc = enc,
                         bitrate = bitrate,
                         gop = gop,
@@ -440,7 +447,7 @@ impl GstEncoder {
                         concat!(
                             "! videoconvert ",
                             "! videorate ",
-                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string)bt709 ",
+                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
                             "! {enc} name=enc bitrate={bitrate} speed-preset=veryfast tune=0 key-int-max={gop} bframes=0 rc-lookahead=0 sync-lookahead=0 threads=0 sliced-threads=true ",
                             "! av1parse "
                         ),
@@ -448,6 +455,7 @@ impl GstEncoder {
                         h = h,
                         fps = fps,
                         range = options.color_range.to_string(),
+                        colorimetry = colorimetry,
                         enc = enc,
                         bitrate = bitrate,
                         gop = gop,

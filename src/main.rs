@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::drm_kms::probe;
 use crate::drm_kms::types::{
-    BitrateMode, CaptureOptions, CaptureOutput, ColorRange, EncoderBackend, FrameRateMode,
+    BitrateMode, CaptureOptions, CaptureOutput, ColorRange, Colorimetry, EncoderBackend, FrameRateMode,
     VideoCodec,
 };
 
@@ -69,6 +69,8 @@ struct CaptureArgs {
     bitrate_mode: BitrateMode,
     #[arg(short = 'c', long, default_value_t = ColorRange::Full)]
     color_range: ColorRange,
+    #[arg(long, default_value_t = Colorimetry::Bt709)]
+    colorimetry: Colorimetry,
     #[arg(long, default_value_t = EncoderBackend::Vaapi)]
     encoder_backend: EncoderBackend,
     #[arg(short = 'v', long, default_value_t = VideoCodec::H264)]
@@ -120,6 +122,7 @@ fn main() -> Result<()> {
                 frame_rate_mode: capture.frame_rate_mode,
                 bitrate_mode: capture.bitrate_mode,
                 color_range: capture.color_range,
+                colorimetry: capture.colorimetry,
                 encoder_backend: capture.encoder_backend,
                 video_codec: capture.video_codec,
             };
@@ -155,6 +158,7 @@ fn main() -> Result<()> {
                 frame_rate_mode: capture.frame_rate_mode,
                 bitrate_mode: capture.bitrate_mode,
                 color_range: capture.color_range,
+                colorimetry: capture.colorimetry,
                 encoder_backend: capture.encoder_backend,
                 video_codec: capture.video_codec,
             };
