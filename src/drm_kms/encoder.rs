@@ -7,7 +7,7 @@ use gstreamer_app as gst_app;
 
 use crate::drm_kms::gstreamer::{ExportError, push_exported_dmabuf};
 use crate::drm_kms::types::{
-    BitrateMode, ColorRange, EncoderBackend, ExportedDmabuf, FrameRateMode,
+    BitrateMode, ColorRange, EncoderBackend, ExportedDmabuf, FrameRateMode, VideoCodec,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +46,7 @@ pub struct EncoderOptions {
     pub bitrate_mode: BitrateMode,
     pub color_range: ColorRange,
     pub encoder_backend: EncoderBackend,
+    pub video_codec: VideoCodec,
 }
 
 impl EncoderOptions {
@@ -77,20 +78,61 @@ fn fourcc_to_raw_format(fourcc: u32) -> Option<&'static str> {
 }
 
 fn quality_bpp_floor(mode: &BitrateMode) -> f64 {
-    // High-quality floors for desktop capture with H.264.
-    // High resolutions/high FPS need far more bits/frame than camera footage.
     match mode {
         BitrateMode::Vbr => 0.12,
         BitrateMode::Cbr => 0.15,
         BitrateMode::Qvbr => 0.10,
+        BitrateMode::Vcm => 0.12,
+        BitrateMode::Default
+        | BitrateMode::Cqp
+        | BitrateMode::Icq
+        | BitrateMode::Quant
+        | BitrateMode::Qual
+        | BitrateMode::Pass1
+        | BitrateMode::Pass2
+        | BitrateMode::Pass3 => 0.0,
     }
 }
 
 fn auto_bitrate_floor_kbps(width: i32, height: i32, fps: u32, mode: &BitrateMode) -> u32 {
+    if quality_bpp_floor(mode) <= 0.0 {
+        return 0;
+    }
     let pixels_per_sec = (width.max(1) as f64) * (height.max(1) as f64) * (fps.max(1) as f64);
     let bits_per_sec = pixels_per_sec * quality_bpp_floor(mode);
-    // Keep sane lower bound for low-res streams.
     ((bits_per_sec / 1000.0).ceil() as u32).max(25_000)
+}
+
+fn codec_elements(codec: &VideoCodec) -> (&'static str, &'static str) {
+    match codec {
+        VideoCodec::H264 => ("h264parse", "avdec_h264"),
+        VideoCodec::H265 => ("h265parse", "avdec_h265"),
+        VideoCodec::Av1 => ("av1parse", "avdec_av1"),
+    }
+}
+
+fn vaapi_encoder_name(codec: &VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H264 => "vah264enc",
+        VideoCodec::H265 => "vah265enc",
+        VideoCodec::Av1 => "vaav1enc",
+    }
+}
+
+fn vulkan_encoder_name(codec: &VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H264 => "vulkanh264enc",
+        VideoCodec::H265 => "vulkanh265enc",
+        VideoCodec::Av1 => "vulkanav1enc",
+    }
+}
+
+fn cpu_encoder_name(codec: &VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H264 => "x264enc",
+        VideoCodec::H265 => "x265enc",
+        VideoCodec::Av1 => "av1enc",
+    }
 }
 
 fn set_appsrc_caps(
@@ -172,19 +214,53 @@ fn set_appsrc_caps(
     Ok(())
 }
 
-fn get_rate_control(mode: &BitrateMode) -> &'static str {
-    match mode {
-        BitrateMode::Vbr => "vbr",
-        BitrateMode::Cbr => "cbr",
-        BitrateMode::Qvbr => "qvbr",
+fn vaapi_rate_control(mode: &BitrateMode, codec: &VideoCodec) -> Result<&'static str, EncodeError> {
+    match (codec, mode) {
+        (VideoCodec::H264, BitrateMode::Cbr)
+        | (VideoCodec::H265, BitrateMode::Cbr)
+        | (VideoCodec::Av1, BitrateMode::Cbr) => Ok("cbr"),
+        (VideoCodec::H264, BitrateMode::Vbr)
+        | (VideoCodec::H265, BitrateMode::Vbr)
+        | (VideoCodec::Av1, BitrateMode::Vbr) => Ok("vbr"),
+        (VideoCodec::H264, BitrateMode::Cqp)
+        | (VideoCodec::H265, BitrateMode::Cqp)
+        | (VideoCodec::Av1, BitrateMode::Cqp) => Ok("cqp"),
+        (VideoCodec::H264, BitrateMode::Vcm) | (VideoCodec::H265, BitrateMode::Vcm) => Ok("vcm"),
+        (VideoCodec::H264, BitrateMode::Icq) | (VideoCodec::H265, BitrateMode::Icq) => Ok("icq"),
+        (VideoCodec::H264, BitrateMode::Qvbr) | (VideoCodec::H265, BitrateMode::Qvbr) => Ok("qvbr"),
+        (_, BitrateMode::Default) => Ok("cbr"),
+        _ => Err(EncodeError::Bus(format!(
+            "rate-control {:?} is not supported for vaapi {:?}",
+            mode, codec
+        ))),
     }
 }
 
-fn get_vulkan_rate_control(mode: &BitrateMode) -> &'static str {
+fn vulkan_rate_control(mode: &BitrateMode) -> Result<&'static str, EncodeError> {
     match mode {
-        BitrateMode::Vbr => "vbr",
-        BitrateMode::Cbr => "cbr",
-        BitrateMode::Qvbr => "vbr",
+        BitrateMode::Default => Ok("default"),
+        BitrateMode::Cqp => Ok("cqp"),
+        BitrateMode::Cbr => Ok("cbr"),
+        BitrateMode::Vbr | BitrateMode::Qvbr => Ok("vbr"),
+        _ => Err(EncodeError::Bus(format!(
+            "rate-control {:?} is not supported for vulkan backend",
+            mode
+        ))),
+    }
+}
+
+fn cpu_rate_control(mode: &BitrateMode) -> Result<&'static str, EncodeError> {
+    match mode {
+        BitrateMode::Cbr => Ok("cbr"),
+        BitrateMode::Quant | BitrateMode::Cqp => Ok("quant"),
+        BitrateMode::Qual | BitrateMode::Icq | BitrateMode::Vbr | BitrateMode::Qvbr => Ok("qual"),
+        BitrateMode::Pass1 => Ok("pass1"),
+        BitrateMode::Pass2 => Ok("pass2"),
+        BitrateMode::Pass3 => Ok("pass3"),
+        _ => Err(EncodeError::Bus(format!(
+            "rate-control {:?} is not supported for x264 backend",
+            mode
+        ))),
     }
 }
 
@@ -198,16 +274,7 @@ impl GstEncoder {
         let fps = options.fps.max(1);
         let auto_floor = auto_bitrate_floor_kbps(ex.width, ex.height, fps, &options.bitrate_mode);
         let requested = options.bitrate_kbps.max(1);
-        let bitrate = requested.max(auto_floor);
-        let rate_control = get_rate_control(&options.bitrate_mode);
-        let enc_quality_props = match options.bitrate_mode {
-            // High-quality constrained VBR tuned for desktop capture.
-            BitrateMode::Vbr => "target-usage=1 target-percentage=95 min-qp=1 max-qp=35 qpi=18",
-            // Tight CBR with bounded QP so quality does not collapse.
-            BitrateMode::Cbr => "target-usage=1 min-qp=1 max-qp=30 qpi=20",
-            // Let encoder choose defaults for QVBR, which should be good quality.
-            BitrateMode::Qvbr => "",
-        };
+        let bitrate = requested.max(auto_floor).max(1);
         if bitrate > requested {
             log::warn!(
                 "Raising bitrate from {} to {} kbps to avoid quality collapse at {}x{}@{} ({:?})",
@@ -222,59 +289,114 @@ impl GstEncoder {
 
         let w = ex.width.max(1);
         let h = ex.height.max(1);
-        if w > 1920 || h > 1200 && options.encoder_backend == EncoderBackend::X264 {
+        if (w > 1920 || h > 1200) && options.encoder_backend == EncoderBackend::Cpu {
             log::warn!(
-                "Resolution {}x{} may be too large for x264 (cpu) to handle efficiently; consider using vaapi or vulkan backend for better performance",
+                "Resolution {}x{} may be too large for cpu to handle efficiently; consider using vaapi or vulkan backend for better performance",
                 w,
                 h
             );
         }
         let gop = fps * 2;
+        let (parser, decoder) = codec_elements(&options.video_codec);
         let encode_chain = match options.encoder_backend {
-            EncoderBackend::Vaapi => format!(
-                concat!(
-                    "! vapostproc ",
-                    "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1 ",
-                    "! vah264enc name=enc rate-control={rate_control} bitrate={bitrate} key-int-max={gop} b-frames=0 cabac=true dct8x8=true cpb-size=0 {enc_quality_props} ",
-                    "! h264parse "
-                ),
-                w = w,
-                h = h,
-                fps = fps,
-                rate_control = rate_control,
-                bitrate = bitrate,
-                gop = gop,
-                enc_quality_props = enc_quality_props,
-            ),
-            EncoderBackend::Vulkan => format!(
-                concat!(
-                    "! vulkanupload ",
-                    "! vulkancolorconvert ",
-                    "! video/x-raw(memory:VulkanImage),format=NV12,width={w},height={h},framerate={fps}/1 ",
-                    "! vulkanh264enc name=enc rate-control={rate_control} bitrate={bitrate} quality=5 min-qp=1 max-qp=30 ",
-                    "! h264parse "
-                ),
-                w = w,
-                h = h,
-                fps = fps,
-                rate_control = get_vulkan_rate_control(&options.bitrate_mode),
-                bitrate = bitrate,
-            ),
-            EncoderBackend::X264 => format!(
-                concat!(
-                    "! videoconvert ",
-                    "! videorate ",
-                    "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string)bt709 ",
-                    "! x264enc name=enc bitrate={bitrate} speed-preset=veryfast tune=zerolatency key-int-max={gop} bframes=0 cabac=true rc-lookahead=0 sync-lookahead=0 threads=0 sliced-threads=true  ",
-                    "! h264parse "
-                ),
-                w = w,
-                h = h,
-                fps = fps,
-                range = options.color_range.to_string(),
-                bitrate = bitrate,
-                gop = gop,
-            ),
+            EncoderBackend::Vaapi => {
+                let rc = vaapi_rate_control(&options.bitrate_mode, &options.video_codec)?;
+                let enc = vaapi_encoder_name(&options.video_codec);
+                format!(
+                    concat!(
+                        "! vapostproc ",
+                        "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1 ",
+                        "! {enc} name=enc rate-control={rc} bitrate={bitrate} ",
+                        "! {parser} "
+                    ),
+                    w = w,
+                    h = h,
+                    fps = fps,
+                    enc = enc,
+                    rc = rc,
+                    bitrate = bitrate,
+                    parser = parser,
+                )
+            }
+            EncoderBackend::Vulkan => {
+                let rc = vulkan_rate_control(&options.bitrate_mode)?;
+                let enc = vulkan_encoder_name(&options.video_codec);
+                format!(
+                    concat!(
+                        "! vulkanupload ",
+                        "! vulkancolorconvert ",
+                        "! video/x-raw(memory:VulkanImage),format=NV12,width={w},height={h},framerate={fps}/1 ",
+                        "! {enc} name=enc rate-control={rc} bitrate={bitrate} quality=5 min-qp=1 max-qp=30 ",
+                        "! {parser} "
+                    ),
+                    w = w,
+                    h = h,
+                    fps = fps,
+                    enc = enc,
+                    rc = rc,
+                    bitrate = bitrate,
+                    parser = parser,
+                )
+            }
+            EncoderBackend::Cpu => {
+                let rc = cpu_rate_control(&options.bitrate_mode)?;
+                let enc = cpu_encoder_name(&options.video_codec);
+                log::debug!(
+                    "Only x264enc supports rate-control among CPU encoders, mapping requested {:?} to rate-control={rc}",
+                    options.bitrate_mode
+                );
+                match options.video_codec {
+                    VideoCodec::H264 => format!(
+                        concat!(
+                            "! videoconvert ",
+                            "! videorate ",
+                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string)bt709 ",
+                            "! {enc} name=enc bitrate={bitrate} pass={pass} speed-preset=veryfast tune=zerolatency key-int-max={gop} bframes=0 cabac=true rc-lookahead=0 sync-lookahead=0 threads=0 sliced-threads=true ",
+                            "! h264parse "
+                        ),
+                        w = w,
+                        h = h,
+                        fps = fps,
+                        range = options.color_range.to_string(),
+                        enc = enc,
+                        bitrate = bitrate,
+                        pass = rc,
+                        gop = gop,
+                    ),
+                    VideoCodec::H265 => format!(
+                        concat!(
+                            "! videoconvert ",
+                            "! videorate ",
+                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string)bt709 ",
+                            "! {enc} name=enc bitrate={bitrate} speed-preset=veryfast tune=zerolatency key-int-max={gop} ",
+                            "! h265parse "
+                        ),
+                        w = w,
+                        h = h,
+                        fps = fps,
+                        range = options.color_range.to_string(),
+                        enc = enc,
+                        bitrate = bitrate,
+                        gop = gop,
+                    ),
+                    VideoCodec::Av1 => format!(
+                        concat!(
+                            "! videoconvert ",
+                            "! videorate ",
+                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string)bt709 ",
+                            "! {enc} name=enc bitrate={bitrate} speed-preset=veryfast tune=0 key-int-max={gop} bframes=0 rc-lookahead=0 sync-lookahead=0 threads=0 sliced-threads=true ",
+                            "! av1parse "
+                        ),
+                        w = w,
+                        h = h,
+                        fps = fps,
+                        range = options.color_range.to_string(),
+                        enc = enc,
+                        bitrate = bitrate,
+                        gop = gop,
+                    ),
+                }
+            }
         };
 
         let desc = match output {
@@ -294,11 +416,12 @@ impl GstEncoder {
                     "appsrc name=src is-live=true format=time do-timestamp=false block=true ",
                     "! queue ",
                     "{encode_chain}",
-                    "! avdec_h264 ",
+                    "! {decoder} ",
                     "! videoconvert ",
                     "! autovideosink sync=false"
                 ),
-                encode_chain = encode_chain
+                encode_chain = encode_chain,
+                decoder = decoder
             ),
         };
         log::debug!("GStreamer pipeline: {desc}");
@@ -319,7 +442,7 @@ impl GstEncoder {
         let max_buffers = match options.encoder_backend {
             // CPU path is slower; keep queue tiny to avoid reusing dmabuf-backed frames
             // before downstream has consumed them.
-            EncoderBackend::X264 => 3u64,
+            EncoderBackend::Cpu => 3u64,
             EncoderBackend::Vaapi | EncoderBackend::Vulkan => 100u64,
         };
         appsrc.set_max_bytes(0);

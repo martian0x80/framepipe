@@ -66,6 +66,15 @@ pub enum BitrateMode {
     Cbr,
     Vbr,
     Qvbr,
+    Vcm,
+    Cqp,
+    Icq,
+    Default,
+    Quant,
+    Qual,
+    Pass1,
+    Pass2,
+    Pass3,
 }
 
 impl ToString for BitrateMode {
@@ -74,6 +83,15 @@ impl ToString for BitrateMode {
             BitrateMode::Cbr => "cbr".to_string(),
             BitrateMode::Vbr => "vbr".to_string(),
             BitrateMode::Qvbr => "qvbr".to_string(),
+            BitrateMode::Vcm => "vcm".to_string(),
+            BitrateMode::Cqp => "cqp".to_string(),
+            BitrateMode::Icq => "icq".to_string(),
+            BitrateMode::Default => "default".to_string(),
+            BitrateMode::Quant => "quant".to_string(),
+            BitrateMode::Qual => "qual".to_string(),
+            BitrateMode::Pass1 => "pass1".to_string(),
+            BitrateMode::Pass2 => "pass2".to_string(),
+            BitrateMode::Pass3 => "pass3".to_string(),
         }
     }
 }
@@ -97,7 +115,7 @@ impl ToString for ColorRange {
 pub enum EncoderBackend {
     Vaapi,
     Vulkan,
-    X264,
+    Cpu,
 }
 
 impl ToString for EncoderBackend {
@@ -105,7 +123,24 @@ impl ToString for EncoderBackend {
         match self {
             EncoderBackend::Vaapi => "vaapi".to_string(),
             EncoderBackend::Vulkan => "vulkan".to_string(),
-            EncoderBackend::X264 => "x264".to_string(),
+            EncoderBackend::Cpu => "cpu".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum VideoCodec {
+    H264,
+    H265,
+    Av1,
+}
+
+impl ToString for VideoCodec {
+    fn to_string(&self) -> String {
+        match self {
+            VideoCodec::H264 => "h264".to_string(),
+            VideoCodec::H265 => "h265".to_string(),
+            VideoCodec::Av1 => "av1".to_string(),
         }
     }
 }
@@ -133,4 +168,5 @@ pub struct CaptureOptions {
     pub bitrate_mode: BitrateMode,
     pub color_range: ColorRange,
     pub encoder_backend: EncoderBackend,
+    pub video_codec: VideoCodec,
 }

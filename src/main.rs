@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use crate::drm_kms::probe;
 use crate::drm_kms::types::{
     BitrateMode, CaptureOptions, CaptureOutput, ColorRange, EncoderBackend, FrameRateMode,
+    VideoCodec,
 };
 
 mod drm_kms;
@@ -64,12 +65,14 @@ struct CaptureArgs {
     bitrate_kbps: u32,
     #[arg(short = 'f', long, default_value_t = FrameRateMode::Cfr)]
     frame_rate_mode: FrameRateMode,
-    #[arg(short = 'b', long, default_value_t = BitrateMode::Cbr)]
+    #[arg(short = 'b', long = "rate-control", alias = "bitrate-mode", default_value_t = BitrateMode::Cbr)]
     bitrate_mode: BitrateMode,
     #[arg(short = 'c', long, default_value_t = ColorRange::Full)]
     color_range: ColorRange,
     #[arg(long, default_value_t = EncoderBackend::Vaapi)]
     encoder_backend: EncoderBackend,
+    #[arg(short = 'v', long, default_value_t = VideoCodec::H264)]
+    video_codec: VideoCodec,
 }
 
 fn resolve_card_path(card: Option<String>) -> Result<String> {
@@ -118,6 +121,7 @@ fn main() -> Result<()> {
                 bitrate_mode: capture.bitrate_mode,
                 color_range: capture.color_range,
                 encoder_backend: capture.encoder_backend,
+                video_codec: capture.video_codec,
             };
             drm_kms::egl::egl_main(opts)?;
         }
@@ -144,6 +148,7 @@ fn main() -> Result<()> {
                 bitrate_mode: capture.bitrate_mode,
                 color_range: capture.color_range,
                 encoder_backend: capture.encoder_backend,
+                video_codec: capture.video_codec,
             };
             drm_kms::egl::egl_main(opts)?;
         }
