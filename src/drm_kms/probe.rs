@@ -5,6 +5,8 @@ use drm::CLOEXEC;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::os::fd::OwnedFd;
+use std::thread;
+use std::time::Duration;
 
 use crate::drm_kms::drm::{DrmInitError, init_drm_device};
 use crate::drm_kms::types::{self, Card};
@@ -208,6 +210,8 @@ pub struct ProbeSession {
     selected_connector_name: Option<String>,
     plane_handles: Vec<plane::Handle>,
     last_fb_by_plane: HashMap<plane::Handle, u32>,
+    last_good_plane: Option<plane::Handle>,
+    consecutive_misses: u32,
 }
 
 impl ProbeSession {
@@ -231,6 +235,8 @@ impl ProbeSession {
             selected_connector_name: None,
             plane_handles: Vec::new(),
             last_fb_by_plane: HashMap::new(),
+            last_good_plane: None,
+            consecutive_misses: 0,
         };
         session.refresh_selection()?;
         Ok(session)
@@ -263,6 +269,8 @@ impl ProbeSession {
         self.plane_handles = planes.iter().map(|p| p.handle()).collect();
         self.selected_connector = Some(picked.handle());
         self.selected_connector_name = Some(picked.to_string());
+        self.last_good_plane = None;
+        self.consecutive_misses = 0;
         log::info!(
             "Pinned connector {} with {} candidate planes",
             self.selected_connector_name.as_deref().unwrap_or("unknown"),
@@ -271,58 +279,12 @@ impl ProbeSession {
         Ok(())
     }
 
-    pub fn capture_frame(&mut self) -> Result<types::ProbeResult, ProbeError> {
-        if self.plane_handles.is_empty() {
-            self.refresh_selection()?;
-        }
+    fn build_probe_result(
+        &mut self,
+        infos: &[drm::control::plane::Info],
+        capture_plane: &drm::control::plane::Info,
+    ) -> Result<types::ProbeResult, ProbeError> {
         let card = &self.card;
-
-        let mut infos = Vec::with_capacity(self.plane_handles.len());
-        for handle in &self.plane_handles {
-            if let Ok(info) = card.get_plane(*handle) {
-                infos.push(info);
-            }
-        }
-        if infos.is_empty() {
-            self.refresh_selection()?;
-            return self.capture_frame();
-        }
-
-        let mut changed_infos = Vec::new();
-        for info in &infos {
-            if let Some(fb) = info.framebuffer() {
-                let fb_id: u32 = fb.into();
-                if self
-                    .last_fb_by_plane
-                    .get(&info.handle())
-                    .copied()
-                    .is_none_or(|prev| prev != fb_id)
-                {
-                    changed_infos.push(info.clone());
-                }
-            }
-        }
-
-        let candidate_infos = if changed_infos.is_empty() {
-            &infos
-        } else {
-            log::trace!(
-                "Detected {} plane(s) with changed FB_ID; prioritizing those",
-                changed_infos.len()
-            );
-            &changed_infos
-        };
-
-        let capture_plane = match get_best_capture_plane(card, candidate_infos) {
-            Ok(p) => p,
-            Err(e) => {
-                if self.allow_fallback_connector {
-                    self.refresh_selection()?;
-                    return self.capture_frame();
-                }
-                return Err(e);
-            }
-        };
         let fb = capture_plane.framebuffer().ok_or(ProbeError::Unknown)?;
         let fb_info = card
             .get_planar_framebuffer(fb)
@@ -349,16 +311,96 @@ impl ProbeSession {
         }
 
         let fb_id: u32 = fb.into();
-        for info in &infos {
+        for info in infos {
             if let Some(fb) = info.framebuffer() {
                 self.last_fb_by_plane.insert(info.handle(), fb.into());
             }
         }
+        self.last_good_plane = Some(capture_plane.handle());
+        self.consecutive_misses = 0;
+
         Ok(types::ProbeResult {
             fb_id,
             fb_info,
             plane_fds,
         })
+    }
+
+    pub fn capture_frame(&mut self) -> Result<types::ProbeResult, ProbeError> {
+        const RETRIES: usize = 3;
+        for _ in 0..=RETRIES {
+            if self.plane_handles.is_empty() {
+                self.refresh_selection()?;
+            }
+            let card = &self.card;
+
+            let mut infos = Vec::with_capacity(self.plane_handles.len());
+            for handle in &self.plane_handles {
+                if let Ok(info) = card.get_plane(*handle) {
+                    infos.push(info);
+                }
+            }
+            if infos.is_empty() {
+                self.consecutive_misses = self.consecutive_misses.saturating_add(1);
+                thread::sleep(Duration::from_millis(2));
+                continue;
+            }
+
+            if let Some(last_handle) = self.last_good_plane {
+                if let Some(last_plane) = infos
+                    .iter()
+                    .find(|p| p.handle() == last_handle && p.framebuffer().is_some())
+                {
+                    return self.build_probe_result(&infos, last_plane);
+                }
+            }
+
+            let mut changed_infos = Vec::new();
+            for info in &infos {
+                if let Some(fb) = info.framebuffer() {
+                    let fb_id: u32 = fb.into();
+                    if self
+                        .last_fb_by_plane
+                        .get(&info.handle())
+                        .copied()
+                        .is_none_or(|prev| prev != fb_id)
+                    {
+                        changed_infos.push(info.clone());
+                    }
+                }
+            }
+
+            let candidate_infos = if changed_infos.is_empty() {
+                &infos
+            } else {
+                log::trace!(
+                    "Detected {} plane(s) with changed FB_ID; prioritizing those",
+                    changed_infos.len()
+                );
+                &changed_infos
+            };
+
+            match get_best_capture_plane(card, candidate_infos) {
+                Ok(p) => return self.build_probe_result(&infos, &p),
+                Err(_) => {
+                    self.consecutive_misses = self.consecutive_misses.saturating_add(1);
+                    thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
+            }
+        }
+
+        if self.allow_fallback_connector || self.consecutive_misses > 30 {
+            log::warn!(
+                "Probe missed {} consecutive frames; refreshing connector/plane selection",
+                self.consecutive_misses
+            );
+            self.refresh_selection()?;
+            self.consecutive_misses = 0;
+            return self.capture_frame();
+        }
+
+        Err(ProbeError::NoPrimaryPlaneForConnector)
     }
 }
 

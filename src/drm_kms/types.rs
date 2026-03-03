@@ -65,6 +65,7 @@ impl ToString for FrameRateMode {
 pub enum BitrateMode {
     Cbr,
     Vbr,
+    Qvbr,
 }
 
 impl ToString for BitrateMode {
@@ -72,6 +73,7 @@ impl ToString for BitrateMode {
         match self {
             BitrateMode::Cbr => "cbr".to_string(),
             BitrateMode::Vbr => "vbr".to_string(),
+            BitrateMode::Qvbr => "qvbr".to_string(),
         }
     }
 }

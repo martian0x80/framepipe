@@ -77,8 +77,9 @@ fn quality_bpp_floor(mode: &BitrateMode) -> f64 {
     // High-quality floors for desktop capture with H.264.
     // High resolutions/high FPS need far more bits/frame than camera footage.
     match mode {
-        BitrateMode::Vbr => 0.50,
-        BitrateMode::Cbr => 0.70,
+        BitrateMode::Vbr => 0.12,
+        BitrateMode::Cbr => 0.15,
+        BitrateMode::Qvbr => 0.10,
     }
 }
 
@@ -168,6 +169,14 @@ fn set_appsrc_caps(
     Ok(())
 }
 
+fn get_rate_control(mode: &BitrateMode) -> u64 {
+    match mode {
+        BitrateMode::Vbr => 4, // VBR
+        BitrateMode::Cbr => 2, // CBR
+        BitrateMode::Qvbr => 1024, // QVBR (if supported by encoder)
+    }
+}
+
 impl GstEncoder {
     pub fn new_with_output(
         output: EncoderOutput<'_>,
@@ -179,12 +188,14 @@ impl GstEncoder {
         let auto_floor = auto_bitrate_floor_kbps(ex.width, ex.height, fps, &options.bitrate_mode);
         let requested = options.bitrate_kbps.max(1);
         let bitrate = requested.max(auto_floor);
-        let rate_control = &options.bitrate_mode.to_string();
+        let rate_control = get_rate_control(&options.bitrate_mode);
         let enc_quality_props = match options.bitrate_mode {
             // High-quality constrained VBR tuned for desktop capture.
             BitrateMode::Vbr => "target-usage=1 target-percentage=95 min-qp=1 max-qp=35 qpi=18",
             // Tight CBR with bounded QP so quality does not collapse.
             BitrateMode::Cbr => "target-usage=1 min-qp=1 max-qp=30 qpi=20",
+            // Let encoder choose defaults for QVBR, which should be good quality.
+            BitrateMode::Qvbr => "",
         };
         if bitrate > requested {
             log::warn!(
@@ -297,9 +308,12 @@ impl GstEncoder {
     }
 
     pub fn push_frame(&mut self, ex: &ExportedDmabuf) -> Result<(), EncodeError> {
+        let elapsed_ns = self.start.elapsed().as_nanos() as u64;
         let pts_ns = match self.options.frame_rate_mode {
-            FrameRateMode::Cfr => self.next_pts_ns,
-            FrameRateMode::Vfr => self.start.elapsed().as_nanos() as u64,
+            // Keep CFR cadence, but never allow encoded timeline to run ahead of wall clock.
+            // Without this, backpressure can make output play too fast.
+            FrameRateMode::Cfr => self.next_pts_ns.max(elapsed_ns),
+            FrameRateMode::Vfr => elapsed_ns,
         };
         let duration_ns = match self.options.frame_rate_mode {
             FrameRateMode::Cfr => Some(self.frame_ns),

@@ -34,7 +34,7 @@ fn dmabuf_size(fd: std::os::fd::RawFd) -> std::io::Result<usize> {
 
 pub fn push_exported_dmabuf(
     appsrc: &gst_app::AppSrc,
-    ex: &ExportedDmabuf, // your struct: fds/offsets/strides/fourcc/modifier/pts
+    ex: &ExportedDmabuf,
     pts_ns: u64,
     duration_ns: Option<u64>,
 ) -> Result<(), ExportError> {
