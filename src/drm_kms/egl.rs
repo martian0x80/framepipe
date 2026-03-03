@@ -577,17 +577,25 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
     };
 
     let first_slot = 0usize;
-    let fence = unsafe {
-        pipelines[first_slot]
-            .render_with_cursor(NativeTexture(NonZero::new(texture).unwrap()), &cursor_state)
-    }
-    .map_err(EglError::Pipeline)?;
-    unsafe {
-        pipelines[first_slot]
-            .gl
-            .client_wait_sync(fence, glow::SYNC_FLUSH_COMMANDS_BIT, 1_000_000_000);
-        pipelines[first_slot].gl.delete_sync(fence);
-    }
+        let fence = unsafe {
+            pipelines[first_slot]
+                .render_with_cursor(NativeTexture(NonZero::new(texture).unwrap()), &cursor_state)
+        }
+        .map_err(EglError::Pipeline)?;
+        unsafe {
+            let wait = pipelines[first_slot].gl.client_wait_sync(
+                fence,
+                glow::SYNC_FLUSH_COMMANDS_BIT,
+                1_000_000_000,
+            );
+            if wait == glow::WAIT_FAILED || wait == glow::TIMEOUT_EXPIRED {
+                log::warn!("Initial frame GL fence wait returned {}, forcing glFinish()", wait);
+                pipelines[first_slot].gl.finish();
+            }
+            pipelines[first_slot].gl.delete_sync(fence);
+            // Ensure writes to output texture are visible before EGL DMABUF export.
+            pipelines[first_slot].gl.finish();
+        }
 
     let first_exported = unsafe {
         egl_dmabuf_export::export_rgba_tex_to_dmabuf(
@@ -704,10 +712,21 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
         .map_err(EglError::Pipeline)?;
 
         unsafe {
-            pipelines[slot]
-                .gl
-                .client_wait_sync(fence, glow::SYNC_FLUSH_COMMANDS_BIT, 1_000_000_000);
+            let wait = pipelines[slot].gl.client_wait_sync(
+                fence,
+                glow::SYNC_FLUSH_COMMANDS_BIT,
+                1_000_000_000,
+            );
+            if wait == glow::WAIT_FAILED || wait == glow::TIMEOUT_EXPIRED {
+                log::warn!(
+                    "Frame {} GL fence wait returned {}, forcing glFinish()",
+                    frame_idx, wait
+                );
+                pipelines[slot].gl.finish();
+            }
             pipelines[slot].gl.delete_sync(fence);
+            // Ensure writes to output texture are visible before EGL DMABUF export.
+            pipelines[slot].gl.finish();
         }
 
         let exported = unsafe {
