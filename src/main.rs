@@ -61,11 +61,11 @@ struct CaptureArgs {
     dump_dir: PathBuf,
     #[arg(long, default_value_t = 30)]
     dump_every: u32,
-    #[arg(long, default_value_t = 15000)]
+    #[arg(short = 'b', long, default_value_t = 15000)]
     bitrate_kbps: u32,
     #[arg(short = 'f', long, default_value_t = FrameRateMode::Cfr)]
     frame_rate_mode: FrameRateMode,
-    #[arg(short = 'b', long = "rate-control", alias = "bitrate-mode", default_value_t = BitrateMode::Cbr)]
+    #[arg(short = 'r', long = "rate-control", alias = "bitrate-mode", default_value_t = BitrateMode::Default)]
     bitrate_mode: BitrateMode,
     #[arg(short = 'c', long, default_value_t = ColorRange::Full)]
     color_range: ColorRange,
@@ -123,6 +123,14 @@ fn main() -> Result<()> {
                 encoder_backend: capture.encoder_backend,
                 video_codec: capture.video_codec,
             };
+            if opts.encoder_backend == EncoderBackend::Vulkan {
+                // someday, couldn't find the plugin for vulkanh264enc, is it upstream yet?
+                return Err(eyre::eyre!("Vulkan encoder backend not supported yet"));
+            }
+            if opts.video_codec == VideoCodec::Av1 {
+                // later, who even uses AV1 for screen capture?
+                return Err(eyre::eyre!("AV1 video codec not supported yet"));
+            }
             drm_kms::egl::egl_main(opts)?;
         }
         Commands::Preview { capture } => {

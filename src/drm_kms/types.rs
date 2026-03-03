@@ -61,7 +61,7 @@ impl ToString for FrameRateMode {
     }
 }
 
-#[derive(Debug, Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, clap::ValueEnum, PartialEq, Eq)]
 pub enum BitrateMode {
     Cbr,
     Vbr,
@@ -128,7 +128,7 @@ impl ToString for EncoderBackend {
     }
 }
 
-#[derive(Debug, Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, clap::ValueEnum, PartialEq, Eq)]
 pub enum VideoCodec {
     H264,
     H265,
