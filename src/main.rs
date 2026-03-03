@@ -4,7 +4,9 @@ use eyre::Result;
 use std::path::PathBuf;
 
 use crate::drm_kms::probe;
-use crate::drm_kms::types::{FrameRateMode, BitrateMode, ColorRange, CaptureOptions, CaptureOutput};
+use crate::drm_kms::types::{
+    BitrateMode, CaptureOptions, CaptureOutput, ColorRange, EncoderBackend, FrameRateMode,
+};
 
 mod drm_kms;
 
@@ -66,6 +68,8 @@ struct CaptureArgs {
     bitrate_mode: BitrateMode,
     #[arg(short = 'c', long, default_value_t = ColorRange::Full)]
     color_range: ColorRange,
+    #[arg(long, default_value_t = EncoderBackend::Vaapi)]
+    encoder_backend: EncoderBackend,
 }
 
 fn resolve_card_path(card: Option<String>) -> Result<String> {
@@ -113,6 +117,7 @@ fn main() -> Result<()> {
                 frame_rate_mode: capture.frame_rate_mode,
                 bitrate_mode: capture.bitrate_mode,
                 color_range: capture.color_range,
+                encoder_backend: capture.encoder_backend,
             };
             drm_kms::egl::egl_main(opts)?;
         }
@@ -138,6 +143,7 @@ fn main() -> Result<()> {
                 frame_rate_mode: capture.frame_rate_mode,
                 bitrate_mode: capture.bitrate_mode,
                 color_range: capture.color_range,
+                encoder_backend: capture.encoder_backend,
             };
             drm_kms::egl::egl_main(opts)?;
         }

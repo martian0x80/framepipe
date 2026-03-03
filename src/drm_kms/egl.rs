@@ -616,6 +616,7 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
         frame_rate_mode: options.frame_rate_mode,
         bitrate_mode: options.bitrate_mode,
         color_range: options.color_range,
+        encoder_backend: options.encoder_backend,
     };
     let frame_period = Duration::from_nanos(1_000_000_000u64 / fps as u64);
     let dump_frames = options.dump_frames;

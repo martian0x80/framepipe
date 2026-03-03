@@ -93,6 +93,23 @@ impl ToString for ColorRange {
     }
 }
 
+#[derive(Debug, Clone, clap::ValueEnum, PartialEq, Eq)]
+pub enum EncoderBackend {
+    Vaapi,
+    Vulkan,
+    X264,
+}
+
+impl ToString for EncoderBackend {
+    fn to_string(&self) -> String {
+        match self {
+            EncoderBackend::Vaapi => "vaapi".to_string(),
+            EncoderBackend::Vulkan => "vulkan".to_string(),
+            EncoderBackend::X264 => "x264".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum CaptureOutput {
     File(PathBuf),
@@ -115,4 +132,5 @@ pub struct CaptureOptions {
     pub frame_rate_mode: FrameRateMode,
     pub bitrate_mode: BitrateMode,
     pub color_range: ColorRange,
+    pub encoder_backend: EncoderBackend,
 }
