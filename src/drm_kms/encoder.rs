@@ -348,12 +348,12 @@ impl GstEncoder {
                 let enc = vaapi_encoder_name(&options.video_codec);
                 let range = options.color_range.to_string();
                 let vaapi_rc_quality_props = match options.bitrate_mode {
-                    BitrateMode::Cbr => "target-usage=1 min-qp=1 max-qp=24 qpi=16",
+                    BitrateMode::Cbr => "target-usage=1 min-qp=1 max-qp=10 qpi=5",
                     BitrateMode::Vbr | BitrateMode::Qvbr => {
-                        "target-usage=1 target-percentage=100 min-qp=1 max-qp=20 qpi=16"
+                        "target-usage=1 target-percentage=100 min-qp=1 max-qp=10 qpi=5"
                     }
-                    BitrateMode::Icq => "target-usage=1 min-qp=1 max-qp=24 qpi=14",
-                    BitrateMode::Cqp => "min-qp=1 max-qp=24 qpi=16",
+                    BitrateMode::Icq => "target-usage=1 min-qp=1 max-qp=16 qpi=8",
+                    BitrateMode::Cqp => "min-qp=1 max-qp=16 qpi=8",
                     _ => "",
                 };
                 format!(
