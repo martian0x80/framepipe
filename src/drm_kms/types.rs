@@ -128,9 +128,29 @@ impl ToString for Colorimetry {
     }
 }
 
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum QualityPreset {
+    Low,
+    Medium,
+    High,
+    Ultra,
+}
+
+impl ToString for QualityPreset {
+    fn to_string(&self) -> String {
+        match self {
+            QualityPreset::Low => "low".to_string(),
+            QualityPreset::Medium => "medium".to_string(),
+            QualityPreset::High => "high".to_string(),
+            QualityPreset::Ultra => "ultra".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, clap::ValueEnum, PartialEq, Eq)]
 pub enum EncoderBackend {
     Vaapi,
+    Qsv,
     Vulkan,
     Cpu,
 }
@@ -139,6 +159,7 @@ impl ToString for EncoderBackend {
     fn to_string(&self) -> String {
         match self {
             EncoderBackend::Vaapi => "vaapi".to_string(),
+            EncoderBackend::Qsv => "qsv".to_string(),
             EncoderBackend::Vulkan => "vulkan".to_string(),
             EncoderBackend::Cpu => "cpu".to_string(),
         }
@@ -183,6 +204,7 @@ pub struct CaptureOptions {
     pub bitrate_kbps: u32,
     pub frame_rate_mode: FrameRateMode,
     pub bitrate_mode: BitrateMode,
+    pub quality: QualityPreset,
     pub color_range: ColorRange,
     pub colorimetry: Colorimetry,
     pub encoder_backend: EncoderBackend,

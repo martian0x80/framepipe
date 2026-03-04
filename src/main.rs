@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use crate::drm_kms::probe;
 use crate::drm_kms::types::{
-    BitrateMode, CaptureOptions, CaptureOutput, ColorRange, Colorimetry, EncoderBackend, FrameRateMode,
-    VideoCodec,
+    BitrateMode, CaptureOptions, CaptureOutput, ColorRange, Colorimetry, EncoderBackend,
+    FrameRateMode, QualityPreset, VideoCodec,
 };
 
 mod drm_kms;
@@ -67,6 +67,8 @@ struct CaptureArgs {
     frame_rate_mode: FrameRateMode,
     #[arg(short = 'r', long = "rate-control", alias = "bitrate-mode", default_value_t = BitrateMode::Default)]
     bitrate_mode: BitrateMode,
+    #[arg(short = 'q', long, default_value_t = QualityPreset::High)]
+    quality: QualityPreset,
     #[arg(short = 'c', long, default_value_t = ColorRange::Full)]
     color_range: ColorRange,
     #[arg(long, default_value_t = Colorimetry::Bt709)]
@@ -121,19 +123,12 @@ fn main() -> Result<()> {
                 bitrate_kbps: capture.bitrate_kbps,
                 frame_rate_mode: capture.frame_rate_mode,
                 bitrate_mode: capture.bitrate_mode,
+                quality: capture.quality,
                 color_range: capture.color_range,
                 colorimetry: capture.colorimetry,
                 encoder_backend: capture.encoder_backend,
                 video_codec: capture.video_codec,
             };
-            if opts.encoder_backend == EncoderBackend::Vulkan {
-                // someday, couldn't find the plugin for vulkanh264enc, is it upstream yet?
-                return Err(eyre::eyre!("Vulkan encoder backend not supported yet"));
-            }
-            if opts.video_codec == VideoCodec::Av1 {
-                // later, who even uses AV1 for screen capture?
-                return Err(eyre::eyre!("AV1 video codec not supported yet"));
-            }
             drm_kms::egl::egl_main(opts)?;
         }
         Commands::Preview { capture } => {
@@ -157,6 +152,7 @@ fn main() -> Result<()> {
                 bitrate_kbps: capture.bitrate_kbps,
                 frame_rate_mode: capture.frame_rate_mode,
                 bitrate_mode: capture.bitrate_mode,
+                quality: capture.quality,
                 color_range: capture.color_range,
                 colorimetry: capture.colorimetry,
                 encoder_backend: capture.encoder_backend,

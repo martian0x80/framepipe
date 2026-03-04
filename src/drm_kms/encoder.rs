@@ -9,7 +9,7 @@ use gstreamer_app as gst_app;
 use crate::drm_kms::gstreamer::{ExportError, push_exported_dmabuf};
 use crate::drm_kms::types::{
     BitrateMode, ColorRange, Colorimetry, EncoderBackend, ExportedDmabuf, FrameRateMode,
-    VideoCodec,
+    QualityPreset, VideoCodec,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +48,7 @@ pub struct EncoderOptions {
     pub bitrate_kbps: u32,
     pub frame_rate_mode: FrameRateMode,
     pub bitrate_mode: BitrateMode,
+    pub quality: QualityPreset,
     pub color_range: ColorRange,
     pub colorimetry: Colorimetry,
     pub encoder_backend: EncoderBackend,
@@ -137,6 +138,24 @@ fn cpu_encoder_name(codec: &VideoCodec) -> &'static str {
         VideoCodec::H264 => "x264enc",
         VideoCodec::H265 => "x265enc",
         VideoCodec::Av1 => "av1enc",
+    }
+}
+
+fn qsv_encoder_name(codec: &VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H264 => "qsvh264enc",
+        VideoCodec::H265 => "qsvh265enc",
+        VideoCodec::Av1 => "qsvav1enc",
+    }
+}
+
+fn is_codec_supported(backend: &EncoderBackend, codec: &VideoCodec) -> bool {
+    match (backend, codec) {
+        (EncoderBackend::Vaapi, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
+        (EncoderBackend::Qsv, VideoCodec::H264 | VideoCodec::H265) => true,
+        (EncoderBackend::Vulkan, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
+        (EncoderBackend::Cpu, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
+        _ => false,
     }
 }
 
@@ -274,6 +293,66 @@ fn cpu_rate_control(mode: &BitrateMode) -> Result<&'static str, EncodeError> {
     }
 }
 
+fn qsv_rate_control(mode: &BitrateMode, codec: &VideoCodec) -> Result<&'static str, EncodeError> {
+    match (codec, mode) {
+        (VideoCodec::H264, BitrateMode::Cbr) | (VideoCodec::H265, BitrateMode::Cbr) => Ok("cbr"),
+        (VideoCodec::H264, BitrateMode::Vbr) | (VideoCodec::H265, BitrateMode::Vbr) => Ok("vbr"),
+        (VideoCodec::H264, BitrateMode::Cqp) | (VideoCodec::H265, BitrateMode::Cqp) => Ok("cqp"),
+        (VideoCodec::H264, BitrateMode::Icq) | (VideoCodec::H265, BitrateMode::Icq) => Ok("icq"),
+        (VideoCodec::H264, BitrateMode::Qvbr) | (VideoCodec::H265, BitrateMode::Qvbr) => {
+            Ok("qvbr")
+        }
+        (VideoCodec::H264, BitrateMode::Vcm) | (VideoCodec::H265, BitrateMode::Vcm) => Ok("vcm"),
+        (_, BitrateMode::Default) => Ok("icq"),
+        _ => Err(EncodeError::Bus(format!(
+            "rate-control {:?} is not supported for qsv {:?}",
+            mode, codec
+        ))),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct QualityTuning {
+    qpi: u32,
+    max_qp: u32,
+    target_usage: u32,
+    icq_quality: u32,
+    qvbr_quality: u32,
+}
+
+fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
+    match preset {
+        QualityPreset::Low => QualityTuning {
+            qpi: 14,
+            max_qp: 20,
+            target_usage: 4,
+            icq_quality: 28,
+            qvbr_quality: 28,
+        },
+        QualityPreset::Medium => QualityTuning {
+            qpi: 10,
+            max_qp: 15,
+            target_usage: 1,
+            icq_quality: 14,
+            qvbr_quality: 14,
+        },
+        QualityPreset::High => QualityTuning {
+            qpi: 5,
+            max_qp: 10,
+            target_usage: 1,
+            icq_quality: 7,
+            qvbr_quality: 7,
+        },
+        QualityPreset::Ultra => QualityTuning {
+            qpi: 1,
+            max_qp: 5,
+            target_usage: 1,
+            icq_quality: 1,
+            qvbr_quality: 1,
+        },
+    }
+}
+
 fn default_rate_control_for(
     backend: &EncoderBackend,
     codec: &VideoCodec,
@@ -281,8 +360,10 @@ fn default_rate_control_for(
     match (backend, codec) {
         (EncoderBackend::Vaapi, VideoCodec::H264 | VideoCodec::H265) => BitrateMode::Icq,
         (EncoderBackend::Vaapi, VideoCodec::Av1) => BitrateMode::Cqp,
+        (EncoderBackend::Qsv, VideoCodec::H264 | VideoCodec::H265) => BitrateMode::Icq,
         (EncoderBackend::Vulkan, _) => BitrateMode::Cqp,
         (EncoderBackend::Cpu, _) => BitrateMode::Qual,
+        (EncoderBackend::Qsv, VideoCodec::Av1) => BitrateMode::Icq,
     }
 }
 
@@ -293,6 +374,17 @@ impl GstEncoder {
         mut options: EncoderOptions,
     ) -> Result<Self, EncodeError> {
         gst::init()?;
+        if options.encoder_backend == EncoderBackend::Vulkan {
+            return Err(EncodeError::Bus(
+                "vulkan encoder backend is temporarily disabled".to_string(),
+            ));
+        }
+        if !is_codec_supported(&options.encoder_backend, &options.video_codec) {
+            return Err(EncodeError::Bus(format!(
+                "backend {:?} does not support codec {:?}",
+                options.encoder_backend, options.video_codec
+            )));
+        }
         if options.bitrate_mode == BitrateMode::Default {
             let selected = default_rate_control_for(&options.encoder_backend, &options.video_codec);
             log::info!(
@@ -319,6 +411,7 @@ impl GstEncoder {
             );
         }
         let colorimetry = options.colorimetry.to_string();
+        let tuning = quality_tuning(&options.quality);
 
         let w = ex.width.max(1);
         let h = ex.height.max(1);
@@ -333,10 +426,11 @@ impl GstEncoder {
             if options.video_codec == VideoCodec::H264
                 && options.encoder_backend == EncoderBackend::Vaapi
                 && (options.bitrate_mode == BitrateMode::Cbr
-                    || options.bitrate_mode == BitrateMode::Vbr)
+                    || options.bitrate_mode == BitrateMode::Vbr
+                    || options.bitrate_mode == BitrateMode::Qvbr)
             {
                 log::warn!(
-                    "vah264enc may have poor quality at resolutions above 1920x1200 with CBR/VBR; consider using CQP or ICQ rate control mode for better quality",
+                    "vah264enc may have poor quality at high fps on resolutions above 1920x1200 with CBR/VBR/QVBR; consider using CQP or ICQ rate control mode for better quality",
                 );
             }
         }
@@ -348,13 +442,29 @@ impl GstEncoder {
                 let enc = vaapi_encoder_name(&options.video_codec);
                 let range = options.color_range.to_string();
                 let vaapi_rc_quality_props = match options.bitrate_mode {
-                    BitrateMode::Cbr => "target-usage=1 min-qp=1 max-qp=10 qpi=5",
-                    BitrateMode::Vbr | BitrateMode::Qvbr => {
-                        "target-usage=1 target-percentage=100 min-qp=1 max-qp=10 qpi=5"
+                    // Clamp max-qp for quality consistency.
+                    BitrateMode::Cbr => {
+                        format!(
+                            "target-usage={} min-qp=1 max-qp={} qpi={}",
+                            tuning.target_usage, tuning.max_qp, tuning.qpi
+                        )
                     }
-                    BitrateMode::Icq => "target-usage=1 min-qp=1 max-qp=16 qpi=8",
-                    BitrateMode::Cqp => "min-qp=1 max-qp=16 qpi=8",
-                    _ => "",
+                    BitrateMode::Vbr | BitrateMode::Qvbr => {
+                        format!(
+                            "target-usage={} target-percentage=100 min-qp=1 max-qp={} qpi={}",
+                            tuning.target_usage, tuning.max_qp, tuning.qpi
+                        )
+                    }
+                    BitrateMode::Icq => {
+                        format!(
+                            "target-usage={} min-qp=1 max-qp={} qpi={}",
+                            tuning.target_usage, tuning.max_qp, tuning.qpi
+                        )
+                    }
+                    BitrateMode::Cqp => {
+                        format!("min-qp=1 max-qp={} qpi={}", tuning.max_qp, tuning.qpi)
+                    }
+                    _ => String::new(),
                 };
                 format!(
                     concat!(
@@ -372,7 +482,49 @@ impl GstEncoder {
                     rc = rc,
                     bitrate = bitrate,
                     gop = gop,
-                    vaapi_rc_quality_props = vaapi_rc_quality_props,
+                    vaapi_rc_quality_props = vaapi_rc_quality_props.as_str(),
+                    parser = parser,
+                )
+            }
+            EncoderBackend::Qsv => {
+                let rc = qsv_rate_control(&options.bitrate_mode, &options.video_codec)?;
+                let enc = qsv_encoder_name(&options.video_codec);
+                let range = options.color_range.to_string();
+                let qsv_quality_props = match options.bitrate_mode {
+                    BitrateMode::Icq => format!(
+                        "icq-quality={} max-qp-i={} max-qp-p={} max-qp-b={} target-usage={} low-latency=true",
+                        tuning.icq_quality, tuning.max_qp, tuning.max_qp, tuning.max_qp, tuning.target_usage
+                    ),
+                    BitrateMode::Cqp => format!(
+                        "qp-i={} qp-p={} qp-b={} max-qp-i={} max-qp-p={} max-qp-b={} target-usage={} low-latency=true",
+                        tuning.qpi, tuning.qpi, tuning.qpi, tuning.max_qp, tuning.max_qp, tuning.max_qp, tuning.target_usage
+                    ),
+                    BitrateMode::Qvbr => format!(
+                        "qvbr-quality={} max-qp-i={} max-qp-p={} max-qp-b={} target-usage={} low-latency=true",
+                        tuning.qvbr_quality, tuning.max_qp, tuning.max_qp, tuning.max_qp, tuning.target_usage
+                    ),
+                    _ => format!(
+                        "max-qp-i={} max-qp-p={} max-qp-b={} target-usage={} low-latency=true",
+                        tuning.max_qp, tuning.max_qp, tuning.max_qp, tuning.target_usage
+                    ),
+                };
+                format!(
+                    concat!(
+                        "! vapostproc ",
+                        "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
+                        "! {enc} name=enc rate-control={rc} bitrate={bitrate} gop-size={gop} {qsv_quality_props} ",
+                        "! {parser} "
+                    ),
+                    w = w,
+                    h = h,
+                    fps = fps,
+                    range = range,
+                    colorimetry = colorimetry,
+                    enc = enc,
+                    rc = rc,
+                    bitrate = bitrate,
+                    gop = gop,
+                    qsv_quality_props = qsv_quality_props.as_str(),
                     parser = parser,
                 )
             }

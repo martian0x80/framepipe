@@ -623,6 +623,7 @@ pub fn egl_main(options: CaptureOptions) -> Result<(), EglError> {
         bitrate_kbps: options.bitrate_kbps,
         frame_rate_mode: options.frame_rate_mode,
         bitrate_mode: options.bitrate_mode,
+        quality: options.quality,
         color_range: options.color_range,
         colorimetry: options.colorimetry,
         encoder_backend: options.encoder_backend,
