@@ -8,7 +8,9 @@ use crate::drm_kms::types::{
     BitrateMode, CaptureOptions, CaptureOutput, ColorRange, Colorimetry, EncoderBackend,
     FrameRateMode, QualityPreset, VideoCodec,
 };
+use crate::wayland::layer::init_wayland;
 
+mod wayland;
 mod drm_kms;
 
 #[derive(Parser, Debug)]
@@ -37,6 +39,10 @@ enum Commands {
     Preview {
         #[command(flatten)]
         capture: CaptureArgs,
+    },
+    Test {
+        #[arg(long, default_value_t = 0.1)]
+        sync_frequency_hz: f64,
     },
 }
 
@@ -159,6 +165,9 @@ fn main() -> Result<()> {
                 video_codec: capture.video_codec,
             };
             drm_kms::egl::egl_main(opts)?;
+        }
+        Commands::Test { sync_frequency_hz } => {
+            init_wayland(sync_frequency_hz)?;
         }
     }
 

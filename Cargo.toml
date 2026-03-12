@@ -21,8 +21,10 @@ gstreamer-video = "0.25.0"
 khronos-egl = { version = "6.0.0", features = ["static"] }
 libc = "0.2.182"
 log = "0.4.29"
+input = "0.9.1"
 serde = "1.0.228"
 signal-hook = "0.3.17"
+smithay-client-toolkit = "0.20.0"
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["full"] }
 zbus = { version = "5.13.2", default-features = false, features = ["tokio"] }
