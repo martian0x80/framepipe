@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use input::event::Event;
 use input::event::pointer::PointerEvent;
@@ -79,39 +79,80 @@ impl MouseTracker {
                     return;
                 }
 
+                let batch_window = Duration::from_millis(8);
+                let mut batch_start = Instant::now();
+                let mut batch_dx = 0.0_f64;
+                let mut batch_dy = 0.0_f64;
+
                 while !stop_clone.load(Ordering::Relaxed) {
-                    if let Err(e) = li.dispatch() {
-                        warn!("libinput dispatch error: {e}");
-                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    let elapsed = batch_start.elapsed();
+                    let timeout_ms = if elapsed >= batch_window {
+                        0
+                    } else {
+                        (batch_window - elapsed).as_millis().max(1) as i32
+                    };
+
+                    let mut pfd = libc::pollfd {
+                        fd: li.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+
+                    let poll_rc = unsafe { libc::poll(&mut pfd as *mut libc::pollfd, 1, timeout_ms) };
+                    if poll_rc < 0 {
+                        warn!("libinput poll error: {}", std::io::Error::last_os_error());
                         continue;
                     }
 
-                    for ev in &mut li {
-                        let Event::Pointer(ptr) = ev else {
+                    if poll_rc > 0 && (pfd.revents & libc::POLLIN) != 0 {
+                        if let Err(e) = li.dispatch() {
+                            warn!("libinput dispatch error: {e}");
                             continue;
-                        };
-                        let (dx, dy) = match ptr {
-                            PointerEvent::Motion(m) => (m.dx(), m.dy()),
-                            _ => continue,
-                        };
-                        let now = Instant::now();
-                        let mut st = state_clone.lock().expect("mouse tracker mutex poisoned");
-                        st.history.push_back((now, dx, dy));
-                        while st.history.len() > 4096 {
-                            st.history.pop_front();
                         }
-                        if st.anchored {
-                            st.x += dx;
-                            st.y += dy;
-                            Self::clamp_to_bounds(&mut st);
-                            debug!(
-                                "mouse tracker calc pos -> ({:.2}, {:.2}) [delta=({:.3}, {:.3})]",
-                                st.x, st.y, dx, dy
-                            );
+
+                        for ev in &mut li {
+                            let Event::Pointer(ptr) = ev else {
+                                continue;
+                            };
+                            let (dx, dy) = match ptr {
+                                PointerEvent::Motion(m) => (m.dx(), m.dy()),
+                                _ => continue,
+                            };
+                            let now = Instant::now();
+                            {
+                                let mut st = state_clone.lock().expect("mouse tracker mutex poisoned");
+                                st.history.push_back((now, dx, dy));
+                                while st.history.len() > 256 {
+                                    st.history.pop_front();
+                                }
+                            }
+                            batch_dx += dx;
+                            batch_dy += dy;
                         }
                     }
 
-                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    if batch_start.elapsed() >= batch_window {
+                        if batch_dx != 0.0 || batch_dy != 0.0 {
+                            let mut st = state_clone.lock().expect("mouse tracker mutex poisoned");
+                            if st.anchored {
+                                st.x += batch_dx;
+                                st.y += batch_dy;
+                                // Clamp once after applying the whole batch.
+                                Self::clamp_to_bounds(&mut st);
+                                debug!(
+                                    "mouse tracker calc pos -> ({:.2}, {:.2}) [batch_delta=({:.3}, {:.3}) window_ms={}]",
+                                    st.x,
+                                    st.y,
+                                    batch_dx,
+                                    batch_dy,
+                                    batch_window.as_millis()
+                                );
+                            }
+                        }
+                        batch_dx = 0.0;
+                        batch_dy = 0.0;
+                        batch_start = Instant::now();
+                    }
                 }
             })
             .map_err(|e| format!("failed to spawn libinput thread: {e}"))?;
