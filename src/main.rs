@@ -3,6 +3,7 @@ use clap::Parser;
 
 mod wayland;
 mod drm_kms;
+mod encode;
 mod app;
 
 fn main() -> Result<()> {

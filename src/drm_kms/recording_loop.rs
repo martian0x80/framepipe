@@ -115,7 +115,7 @@ pub fn run_capture_session(options: CaptureOptions) -> Result<(), EglError> {
     );
 
     let fps: u32 = options.fps.max(1);
-    let enc_opts = crate::drm_kms::encoder::EncoderOptions {
+    let enc_opts = crate::encode::EncoderOptions {
         fps,
         bitrate_kbps: options.bitrate_kbps,
         frame_rate_mode: options.frame_rate_mode,
@@ -135,13 +135,13 @@ pub fn run_capture_session(options: CaptureOptions) -> Result<(), EglError> {
     }
 
     let mut encoder = match &options.output {
-        CaptureOutput::Preview => crate::drm_kms::encoder::GstEncoder::new_with_output(
-            crate::drm_kms::encoder::EncoderOutput::Preview,
+        CaptureOutput::Preview => crate::encode::GstEncoder::new_with_output(
+            crate::encode::EncoderOutput::Preview,
             &first_exported,
             enc_opts.clone(),
         )
         .map_err(|e| EglError::Pipeline(e.to_string()))?,
-        CaptureOutput::File(path) => crate::drm_kms::encoder::GstEncoder::new(
+        CaptureOutput::File(path) => crate::encode::GstEncoder::new(
             &path.to_string_lossy(),
             &first_exported,
             enc_opts.clone(),
@@ -272,7 +272,7 @@ pub fn run_capture_session(options: CaptureOptions) -> Result<(), EglError> {
 
     encoder
         .finish()
-        .map_err(|e: crate::drm_kms::encoder::EncodeError| EglError::Pipeline(e.to_string()))?;
+        .map_err(|e: crate::encode::EncodeError| EglError::Pipeline(e.to_string()))?;
     match &options.output {
         CaptureOutput::Preview => log::info!("Preview stopped"),
         CaptureOutput::File(path) => {
