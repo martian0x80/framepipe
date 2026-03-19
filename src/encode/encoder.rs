@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use gstreamer::prelude::*;
 use gstreamer::{self as gst, glib};
 use gstreamer_app as gst_app;
+use gstreamer_video::DownstreamForceKeyUnitEvent;
 
 use crate::drm_kms::gstreamer::{ExportError, push_exported_dmabuf};
 use crate::drm_kms::types::{
@@ -35,8 +36,6 @@ pub struct GstEncoder {
     next_pts_ns: u64,
     start: Instant,
 }
-
-const FRAME_RING_SLOTS: u64 = 3;
 
 pub enum EncoderOutput<'a> {
     File(&'a str),
@@ -108,6 +107,18 @@ fn auto_bitrate_floor_kbps(width: i32, height: i32, fps: u32, mode: &BitrateMode
     let pixels_per_sec = (width.max(1) as f64) * (height.max(1) as f64) * (fps.max(1) as f64);
     let bits_per_sec = pixels_per_sec * quality_bpp_floor(mode);
     ((bits_per_sec / 1000.0).ceil() as u32).max(25_000)
+}
+
+pub fn recommended_slots(options: &EncoderOptions) -> usize {
+    match options.encoder_backend {
+        EncoderBackend::Cpu => 4usize,
+        EncoderBackend::Vaapi | EncoderBackend::Qsv => match options.video_codec {
+            VideoCodec::Av1 => 16usize,
+            VideoCodec::H265 => 12usize,
+            VideoCodec::H264 => 8usize,
+        },
+        EncoderBackend::Vulkan => 8usize,
+    }
 }
 
 fn codec_elements(codec: &VideoCodec) -> (&'static str, &'static str) {
@@ -369,35 +380,35 @@ struct QualityTuning {
 fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
     match preset {
         QualityPreset::Low => QualityTuning {
-            qpi: 20,
-            qpp: 28,
+            qpi: 35,
+            qpp: 40,
             qpb: 0,
-            min_qp: 15,
-            max_qp: 35,
-            i_frames: 15,
+            min_qp: 32,
+            max_qp: 51,
+            i_frames: 30,
             b_frames: 0,
-            target_usage: 4,
+            target_usage: 7,
             icq_quality: 28,
             qvbr_quality: 28,
         },
         QualityPreset::Medium => QualityTuning {
-            qpi: 16,
-            qpp: 20,
+            qpi: 30,
+            qpp: 32,
             qpb: 0,
-            min_qp: 10,
-            max_qp: 25,
+            min_qp: 22,
+            max_qp: 36,
             i_frames: 20,
             b_frames: 0,
-            target_usage: 4,
+            target_usage: 5,
             icq_quality: 14,
             qvbr_quality: 14,
         },
         QualityPreset::High => QualityTuning {
-            qpi: 11,
-            qpp: 18,
+            qpi: 20,
+            qpp: 24,
             qpb: 0,
-            min_qp: 10,
-            max_qp: 20,
+            min_qp: 16,
+            max_qp: 32,
             i_frames: 25,
             b_frames: 0,
             target_usage: 3,
@@ -517,7 +528,8 @@ impl GstEncoder {
                 );
             }
         }
-        let gop = fps * 2;
+        let gop = tuning.i_frames.max(1);
+        let ring_slots = recommended_slots(&options) as u64;
         let (parser, decoder) = codec_elements(&options.video_codec);
         let encode_chain = match options.encoder_backend {
             EncoderBackend::Vaapi => {
@@ -530,6 +542,7 @@ impl GstEncoder {
                     ("key-int-max", gop.to_string()),
                 ];
                 if options.video_codec == VideoCodec::Av1 {
+                    vaapi_props.push(("ref-frames", "1".to_string()));
                     match options.bitrate_mode {
                         BitrateMode::Cbr => {
                             vaapi_props.push(("target-usage", tuning.target_usage.to_string()));
@@ -559,9 +572,10 @@ impl GstEncoder {
                         _ => {}
                     }
                 } else {
-                    // TODO: debug why setting i-frames and b-frames seems to crash encoder
+                    // TODO: debug why setting i-frames makes the encoder shit itself
                     // vaapi_props.push(("i-frames", tuning.i_frames.to_string()));
-                    // vaapi_props.push(("b-frames", tuning.b_frames.to_string()));
+                    vaapi_props.push(("b-frames", tuning.b_frames.to_string()));
+                    vaapi_props.push(("ref-frames", "1".to_string()));
                     match options.bitrate_mode {
                         // Clamp max-qp for quality consistency.
                         BitrateMode::Cbr => {
@@ -624,6 +638,8 @@ impl GstEncoder {
                     ("gop-size", gop.to_string()),
                     ("low-latency", "true".to_string()),
                     ("target-usage", tuning.target_usage.to_string()),
+                    ("b-frames", tuning.b_frames.to_string()),
+                    ("ref-frames", "1".to_string()),
                 ];
                 match options.bitrate_mode {
                     BitrateMode::Icq => {
@@ -647,6 +663,9 @@ impl GstEncoder {
                         qsv_props.push(("max-qp-b", tuning.max_qp.to_string()));
                     }
                     _ => {
+                        qsv_props.push(("qp-i", tuning.qpi.to_string()));
+                        qsv_props.push(("qp-p", tuning.qpp.to_string()));
+                        qsv_props.push(("qp-b", tuning.qpb.to_string()));
                         qsv_props.push(("max-qp-i", tuning.max_qp.to_string()));
                         qsv_props.push(("max-qp-p", tuning.max_qp.to_string()));
                         qsv_props.push(("max-qp-b", tuning.max_qp.to_string()));
@@ -767,7 +786,7 @@ impl GstEncoder {
                     "! mp4mux faststart=true ",
                     "! filesink location={out}"
                 ),
-                ring = FRAME_RING_SLOTS,
+                ring = ring_slots,
                 encode_chain = encode_chain,
                 out = out_path
             ),
@@ -780,7 +799,7 @@ impl GstEncoder {
                     "! videoconvert ",
                     "! autovideosink sync=false"
                 ),
-                ring = FRAME_RING_SLOTS,
+                ring = ring_slots,
                 encode_chain = encode_chain,
                 decoder = decoder
             ),
@@ -800,7 +819,7 @@ impl GstEncoder {
 
         set_appsrc_caps(&appsrc, ex, &options).map_err(EncodeError::Bus)?;
 
-        let max_buffers = FRAME_RING_SLOTS;
+        let max_buffers = ring_slots;
         appsrc.set_max_bytes(0);
         appsrc.set_property("max-buffers", max_buffers);
         appsrc.set_property("max-time", 0u64);
@@ -852,9 +871,8 @@ impl GstEncoder {
     pub fn push_frame(&mut self, ex: &ExportedDmabuf) -> Result<(), EncodeError> {
         let elapsed_ns = self.start.elapsed().as_nanos() as u64;
         let pts_ns = match self.options.frame_rate_mode {
-            // Keep CFR cadence, but never allow encoded timeline to run ahead of wall clock.
-            // Without this, backpressure can make output play too fast.
-            FrameRateMode::Cfr => self.next_pts_ns.max(elapsed_ns),
+            // Strict CFR: keep a monotonic fixed-step timeline.
+            FrameRateMode::Cfr => self.next_pts_ns,
             FrameRateMode::Vfr => elapsed_ns,
         };
         let duration_ns = match self.options.frame_rate_mode {
@@ -865,6 +883,18 @@ impl GstEncoder {
         push_exported_dmabuf(&self.appsrc, ex, pts_ns, duration_ns)?;
         self.next_pts_ns = pts_ns.saturating_add(self.frame_ns);
         Ok(())
+    }
+
+    pub fn request_keyframe(&self, reason: &str) {
+        let event = DownstreamForceKeyUnitEvent::builder()
+            .all_headers(true)
+            .build();
+        let sent = self.appsrc.upcast_ref::<gst::Element>().send_event(event);
+        if sent {
+            log::debug!("Requested force keyframe ({reason})");
+        } else {
+            log::warn!("Failed to request force keyframe ({reason})");
+        }
     }
 
     pub fn finish(self) -> Result<(), EncodeError> {

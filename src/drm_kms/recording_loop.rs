@@ -95,8 +95,26 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
         prev_fb_id
     );
 
-    let mut pipelines: Vec<gpu_pipeline::GpuPipeline> = Vec::with_capacity(3);
-    for _ in 0..3 {
+    let fps: u32 = options.fps.max(1);
+    let enc_opts = crate::encode::EncoderOptions {
+        fps,
+        bitrate_kbps: options.bitrate_kbps,
+        frame_rate_mode: options.frame_rate_mode,
+        bitrate_mode: options.bitrate_mode,
+        quality: options.quality,
+        color_range: options.color_range,
+        colorimetry: options.colorimetry,
+        encoder_backend: options.encoder_backend,
+        video_codec: options.video_codec,
+    };
+
+    let inflight_slots = crate::encode::recommended_slots(&enc_opts).max(3);
+    log::info!(
+        "Using {} in-flight render surfaces to delay reuse until encoder catches up",
+        inflight_slots
+    );
+    let mut pipelines: Vec<gpu_pipeline::GpuPipeline> = Vec::with_capacity(inflight_slots);
+    for _ in 0..inflight_slots {
         pipelines.push(unsafe { gpu_pipeline::GpuPipeline::new(&egl, output_w, output_h) }
             .map_err(EglError::Pipeline)?);
     }
@@ -149,18 +167,6 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
         first_exported.fds.len()
     );
 
-    let fps: u32 = options.fps.max(1);
-    let enc_opts = crate::encode::EncoderOptions {
-        fps,
-        bitrate_kbps: options.bitrate_kbps,
-        frame_rate_mode: options.frame_rate_mode,
-        bitrate_mode: options.bitrate_mode,
-        quality: options.quality,
-        color_range: options.color_range,
-        colorimetry: options.colorimetry,
-        encoder_backend: options.encoder_backend,
-        video_codec: options.video_codec,
-    };
     let frame_period = Duration::from_nanos(1_000_000_000u64 / fps as u64);
     let dump_frames = options.dump_frames;
     let dump_every = options.dump_every.max(1);
@@ -186,6 +192,7 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
 
     let mut next_deadline = Instant::now();
     let mut frame_idx: u64 = 0;
+    let mut last_forced_keyframe_frame: u64 = 0;
     encoder
         .push_frame(&first_exported)
         .map_err(|e| EglError::Pipeline(e.to_string()))?;
@@ -200,6 +207,8 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
         if control.resume_req.swap(false, Ordering::Relaxed) {
             control.paused.store(false, Ordering::Relaxed);
             log::info!("Recording resumed (SIGUSR2)");
+            encoder.request_keyframe("resume");
+            last_forced_keyframe_frame = frame_idx;
         }
         if control.paused.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(100));
@@ -277,6 +286,12 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
             prev_fb_id = fb_id;
         } else {
             log::trace!("frame {}: fb unchanged {}", frame_idx, fb_id);
+        }
+
+        if frame_idx.saturating_sub(last_forced_keyframe_frame) >= (fps as u64).saturating_mul(2)
+        {
+            encoder.request_keyframe("periodic");
+            last_forced_keyframe_frame = frame_idx;
         }
         log::debug!("Captured frame {} (fb {})", frame_idx, fb_id);
 
