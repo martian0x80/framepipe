@@ -1,5 +1,9 @@
 use std::{
     os::fd::AsRawFd,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -12,7 +16,7 @@ use smithay_client_toolkit::{
         wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface},
     }, shm::{Shm, ShmHandler, slot::SlotPool}
 };
-use crate::wayland::mouse_tracker::MouseTracker;
+use crate::wayland::{mouse_tracker::MouseTrackerLibinput, types::MouseTracker};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WaylandError {
@@ -24,6 +28,28 @@ pub enum WaylandError {
     CompositorBindingFailed,
     #[error("Failed to bind layer shell")]
     LayerShellBindingFailed,
+}
+
+#[derive(Clone)]
+pub struct TrackingControl {
+    pub stop_requested: Arc<AtomicBool>,
+    pub paused: Arc<AtomicBool>,
+}
+
+impl TrackingControl {
+    pub fn new(stop_requested: Arc<AtomicBool>, paused: Arc<AtomicBool>) -> Self {
+        Self {
+            stop_requested,
+            paused,
+        }
+    }
+
+    pub fn idle() -> Self {
+        Self {
+            stop_requested: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 pub struct WaylandState {
@@ -43,7 +69,7 @@ pub struct WaylandState {
     cursor_y: f64,
 
     pointer: Option<WlPointer>,
-    mouse_tracker: MouseTracker,
+    mouse_tracker: MouseTrackerLibinput,
     waiting_for_anchor: bool,
     resync_probe_mode: bool,
     last_anchor_at: Option<Instant>,
@@ -52,10 +78,15 @@ pub struct WaylandState {
     stop_capture: bool,
 }
 
-pub fn init_wayland(sync_frequency_hz: f64) -> Result<(), WaylandError> {
+pub fn init_wayland(
+    sync_frequency_hz: f64,
+    file_path: &std::path::PathBuf,
+    control: TrackingControl,
+) -> Result<(), WaylandError> {
     info!("Initializing Wayland connection and event loop");
+    info!("Mouse tracking output file: {}", file_path.to_string_lossy());
     // Start libinput tracker first so we can replay deltas after first absolute anchor.
-    let mouse_tracker = MouseTracker::start()
+    let mouse_tracker = MouseTrackerLibinput::start(file_path)
         .map_err(|_| WaylandError::ConnectionFailed)?;
 
     let conn = Connection::connect_to_env().map_err(|_| WaylandError::ConnectionFailed)?;
@@ -105,6 +136,14 @@ pub fn init_wayland(sync_frequency_hz: f64) -> Result<(), WaylandError> {
         stop_capture: false,
     };
     loop {
+        if control.stop_requested.load(Ordering::Relaxed) {
+            info!("Mouse tracking stop requested");
+            break;
+        }
+        state
+            .mouse_tracker
+            .set_paused(control.paused.load(Ordering::Relaxed));
+
         if let (Some(period), Some(last_anchor_at)) = (state.resync_period, state.last_anchor_at)
         {
             if !state.waiting_for_anchor && last_anchor_at.elapsed() >= period {
@@ -166,6 +205,10 @@ pub fn init_wayland(sync_frequency_hz: f64) -> Result<(), WaylandError> {
         }
     }
 
+    info!(
+        "Mouse tracking event loop exiting, data written to {}",
+        file_path.to_string_lossy()
+    );
     Ok(())
 }
 

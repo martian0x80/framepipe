@@ -209,4 +209,7 @@ pub struct CaptureOptions {
     pub colorimetry: Colorimetry,
     pub encoder_backend: EncoderBackend,
     pub video_codec: VideoCodec,
+    pub mouse_tracking: bool,
+    pub wayland_sync_frequency: f64,
+    pub mouse_tracking_file: PathBuf,
 }

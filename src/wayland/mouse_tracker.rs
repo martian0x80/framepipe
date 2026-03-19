@@ -1,4 +1,5 @@
-use std::collections::VecDeque;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,24 +10,9 @@ use std::time::{Duration, Instant};
 use input::event::Event;
 use input::event::pointer::PointerEvent;
 use input::{Libinput, LibinputInterface};
-use log::{debug, warn};
+use log::{debug, info, warn};
 
-#[derive(Debug, Clone, Copy)]
-pub struct MouseSample {
-    pub x: f64,
-    pub y: f64,
-    pub anchored: bool,
-}
-
-#[derive(Default)]
-struct MouseState {
-    anchored: bool,
-    x: f64,
-    y: f64,
-    max_x: Option<f64>,
-    max_y: Option<f64>,
-    history: VecDeque<(Instant, f64, f64)>,
-}
+use crate::wayland::types::{MouseSample, MouseState, MouseTracker};
 
 struct LibinputIface;
 
@@ -48,14 +34,15 @@ impl LibinputInterface for LibinputIface {
     }
 }
 
-pub struct MouseTracker {
+pub struct MouseTrackerLibinput {
     state: Arc<Mutex<MouseState>>,
     stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
-impl MouseTracker {
-    fn clamp_to_bounds(st: &mut MouseState) {
+impl MouseTrackerLibinput {
+    pub fn clamp_to_bounds(st: &mut MouseState) {
         if let Some(max_x) = st.max_x {
             st.x = st.x.clamp(0.0, max_x.max(0.0));
         }
@@ -64,11 +51,40 @@ impl MouseTracker {
         }
     }
 
-    pub fn start() -> Result<Self, String> {
+    pub fn anchor_absolute(&self, x: f64, y: f64, at: Instant) {
+        let mut st = self.state.lock().expect("mouse tracker mutex poisoned");
+        let (dx_sum, dy_sum) = st
+            .history
+            .iter()
+            .filter(|(t, _, _)| *t >= at)
+            .fold((0.0_f64, 0.0_f64), |(sx, sy), (_, dx, dy)| {
+                (sx + *dx, sy + *dy)
+            });
+        st.x = x;
+        st.y = y;
+        st.anchored = true;
+        // Replay only deltas observed after anchor timestamp.
+        st.x += dx_sum;
+        st.y += dy_sum;
+        Self::clamp_to_bounds(&mut st);
+        debug!(
+            "mouse tracker anchored at ({:.2}, {:.2}) with replay",
+            st.x, st.y
+        );
+    }
+}
+
+impl MouseTracker for MouseTrackerLibinput {
+    // TODO: add error enum instead of stringly-typed errors.
+    fn start<T: AsRef<std::path::Path>>(file_path: T) -> Result<Self, String> {
         let state = Arc::new(Mutex::new(MouseState::default()));
         let stop = Arc::new(AtomicBool::new(false));
+        let paused = Arc::new(AtomicBool::new(false));
         let state_clone = Arc::clone(&state);
         let stop_clone = Arc::clone(&stop);
+        let paused_clone = Arc::clone(&paused);
+        let file = File::create(file_path).map_err(|e| format!("failed to create mouse tracking file: {e}"))?;
+        let mut writer = BufWriter::new(file);
 
         let thread = thread::Builder::new()
             .name("mouse-tracker-libinput".to_string())
@@ -83,8 +99,21 @@ impl MouseTracker {
                 let mut batch_start = Instant::now();
                 let mut batch_dx = 0.0_f64;
                 let mut batch_dy = 0.0_f64;
+                let mut was_paused = false;
 
                 while !stop_clone.load(Ordering::Relaxed) {
+                    let is_paused = paused_clone.load(Ordering::Relaxed);
+                    if is_paused && !was_paused {
+                        if let Err(e) = writer.flush() {
+                            warn!("mouse tracker pause flush failed: {e}");
+                        } else {
+                            info!("mouse tracker paused: buffered samples flushed");
+                        }
+                    } else if !is_paused && was_paused {
+                        info!("mouse tracker resumed");
+                    }
+                    was_paused = is_paused;
+
                     let elapsed = batch_start.elapsed();
                     let timeout_ms = if elapsed >= batch_window {
                         0
@@ -133,6 +162,7 @@ impl MouseTracker {
 
                     if batch_start.elapsed() >= batch_window {
                         if batch_dx != 0.0 || batch_dy != 0.0 {
+                            let now = Instant::now();
                             let mut st = state_clone.lock().expect("mouse tracker mutex poisoned");
                             if st.anchored {
                                 st.x += batch_dx;
@@ -147,6 +177,24 @@ impl MouseTracker {
                                     batch_dy,
                                     batch_window.as_millis()
                                 );
+
+                                let sample = MouseSample {
+                                    x: st.x,
+                                    y: st.y,
+                                    anchored: st.anchored,
+                                    timestamp: now,
+                                };
+
+                                drop(st); // release lock before file I/O
+
+                                if !is_paused {
+                                    // Sync to file after each batch update, if recording.
+                                    if let Err(e) = Self::write_sample(&mut writer, &sample) {
+                                        warn!("failed to write mouse sample: {e}");
+                                    } else if let Err(e) = writer.flush() {
+                                        warn!("failed to flush mouse sample: {e}");
+                                    }
+                                }
                             }
                         }
                         batch_dx = 0.0;
@@ -154,39 +202,29 @@ impl MouseTracker {
                         batch_start = Instant::now();
                     }
                 }
+
+                if let Err(e) = writer.flush() {
+                    warn!("mouse tracker final flush failed: {e}");
+                } else {
+                    debug!("mouse tracker final flush complete");
+                }
+                debug!("mouse tracker thread exiting");
             })
             .map_err(|e| format!("failed to spawn libinput thread: {e}"))?;
 
         Ok(Self {
             state,
             stop,
+            paused,
             thread: Some(thread),
         })
     }
 
-    pub fn anchor_absolute(&self, x: f64, y: f64, at: Instant) {
-        let mut st = self.state.lock().expect("mouse tracker mutex poisoned");
-        let (dx_sum, dy_sum) = st
-            .history
-            .iter()
-            .filter(|(t, _, _)| *t >= at)
-            .fold((0.0_f64, 0.0_f64), |(sx, sy), (_, dx, dy)| {
-                (sx + *dx, sy + *dy)
-            });
-        st.x = x;
-        st.y = y;
-        st.anchored = true;
-        // Replay only deltas observed after anchor timestamp.
-        st.x += dx_sum;
-        st.y += dy_sum;
-        Self::clamp_to_bounds(&mut st);
-        debug!(
-            "mouse tracker anchored at ({:.2}, {:.2}) with replay",
-            st.x, st.y
-        );
+    fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
     }
 
-    pub fn set_bounds(&self, width: f64, height: f64) {
+    fn set_bounds(&self, width: f64, height: f64) {
         let mut st = self.state.lock().expect("mouse tracker mutex poisoned");
         st.max_x = Some(width);
         st.max_y = Some(height);
@@ -197,21 +235,33 @@ impl MouseTracker {
         );
     }
 
-    pub fn sample(&self) -> MouseSample {
+    fn sample(&self) -> MouseSample {
         let st = self.state.lock().expect("mouse tracker mutex poisoned");
         MouseSample {
             x: st.x,
             y: st.y,
             anchored: st.anchored,
+            timestamp: Instant::now(),
         }
+    }
+    
+    fn write_sample<W: std::io::Write>(w: &mut W, sample: &MouseSample) -> Result<(), String>
+    {
+        serde_json::to_writer(&mut *w, &sample).map_err(|e| format!("failed to serialize mouse sample: {e}"))?;
+        w.write_all("\n".as_bytes()).map_err(|e| format!("failed to write newline after mouse sample: {e}"))?;
+        Ok(())
     }
 }
 
-impl Drop for MouseTracker {
+impl Drop for MouseTrackerLibinput {
     fn drop(&mut self) {
+        info!("mouse tracker stop requested");
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.thread.take() {
-            let _ = h.join();
+            match h.join() {
+                Ok(()) => debug!("mouse tracker thread joined"),
+                Err(_) => warn!("mouse tracker thread join failed"),
+            }
         }
     }
 }

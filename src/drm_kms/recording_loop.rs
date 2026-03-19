@@ -1,28 +1,63 @@
 use glow::{HasContext, NativeTexture};
-use signal_hook::consts::signal::{SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
-use signal_hook::flag as signal_flag;
 use std::{
     fs,
     num::NonZero,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+        atomic::Ordering,
     },
     thread,
     time::{Duration, Instant},
 };
 
+use crate::app::signals::CaptureControl;
 use crate::drm_kms::{
     debug, egl_dmabuf_export, gpu_pipeline,
     probe::ProbeSession,
     types::{CaptureOptions, CaptureOutput},
 };
+use crate::wayland::layer::{init_wayland, TrackingControl};
 
 use super::egl_context::{
     delete_gl_texture, import_current_capture_texture, init_egl, EglCtx, EglError,
 };
 
-pub fn run_capture_session(options: CaptureOptions) -> Result<(), EglError> {
+struct MouseTrackingWorker {
+    stop_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for MouseTrackingWorker {
+    fn drop(&mut self) {
+        self.stop_requested.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            log::info!("Waiting for mouse tracking thread to stop");
+            match handle.join() {
+                Ok(()) => log::debug!("Mouse tracking thread stopped"),
+                Err(_) => log::warn!("Mouse tracking thread join failed"),
+            }
+        }
+    }
+}
+
+pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> Result<(), EglError> {
+    let _mouse_tracking_worker = if options.mouse_tracking {
+        let tracking_path = options.mouse_tracking_file.clone();
+        let sync_frequency_hz = options.wayland_sync_frequency;
+        let tracking_control =
+            TrackingControl::new(control.stop_requested.clone(), control.paused.clone());
+        let handle = thread::spawn(move || {
+            if let Err(e) = init_wayland(sync_frequency_hz, &tracking_path, tracking_control) {
+                log::error!("Failed to initialize Wayland mouse tracking: {e}");
+            }
+        });
+        Some(MouseTrackingWorker {
+            stop_requested: control.stop_requested.clone(),
+            handle: Some(handle),
+        })
+    } else {
+        None
+    };
+
     let EglCtx {
         egl,
         display,
@@ -149,24 +184,6 @@ pub fn run_capture_session(options: CaptureOptions) -> Result<(), EglError> {
         .map_err(|e| EglError::Pipeline(e.to_string()))?,
     };
 
-    let stop_requested = Arc::new(AtomicBool::new(false));
-    let pause_req = Arc::new(AtomicBool::new(false));
-    let resume_req = Arc::new(AtomicBool::new(false));
-    let paused = Arc::new(AtomicBool::new(false));
-    {
-        let stop_requested = Arc::clone(&stop_requested);
-        signal_flag::register(SIGINT, Arc::clone(&stop_requested))
-            .map_err(|e| EglError::Pipeline(format!("failed to register SIGINT: {e}")))?;
-        signal_flag::register(SIGTERM, stop_requested)
-            .map_err(|e| EglError::Pipeline(format!("failed to register SIGTERM: {e}")))?;
-    }
-    {
-        signal_flag::register(SIGUSR1, Arc::clone(&pause_req))
-            .map_err(|e| EglError::Pipeline(format!("failed to register SIGUSR1: {e}")))?;
-        signal_flag::register(SIGUSR2, Arc::clone(&resume_req))
-            .map_err(|e| EglError::Pipeline(format!("failed to register SIGUSR2: {e}")))?;
-    }
-
     let mut next_deadline = Instant::now();
     let mut frame_idx: u64 = 0;
     encoder
@@ -175,16 +192,16 @@ pub fn run_capture_session(options: CaptureOptions) -> Result<(), EglError> {
     let _ = delete_gl_texture(&egl, texture);
     frame_idx += 1;
 
-    while !stop_requested.load(Ordering::Relaxed) {
-        if pause_req.swap(false, Ordering::Relaxed) {
-            paused.store(true, Ordering::Relaxed);
+    while !control.stop_requested.load(Ordering::Relaxed) {
+        if control.pause_req.swap(false, Ordering::Relaxed) {
+            control.paused.store(true, Ordering::Relaxed);
             log::info!("Recording paused (SIGUSR1)");
         }
-        if resume_req.swap(false, Ordering::Relaxed) {
-            paused.store(false, Ordering::Relaxed);
+        if control.resume_req.swap(false, Ordering::Relaxed) {
+            control.paused.store(false, Ordering::Relaxed);
             log::info!("Recording resumed (SIGUSR2)");
         }
-        if paused.load(Ordering::Relaxed) {
+        if control.paused.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(100));
             continue;
         }
@@ -273,6 +290,18 @@ pub fn run_capture_session(options: CaptureOptions) -> Result<(), EglError> {
     encoder
         .finish()
         .map_err(|e: crate::encode::EncodeError| EglError::Pipeline(e.to_string()))?;
+
+    let mouse_file = if options.mouse_tracking {
+        options.mouse_tracking_file.to_string_lossy().into_owned()
+    } else {
+        "disabled".to_string()
+    };
+    log::info!(
+        "Shutdown summary: frames_emitted={} mouse_tracking_file={}",
+        frame_idx,
+        mouse_file
+    );
+
     match &options.output {
         CaptureOutput::Preview => log::info!("Preview stopped"),
         CaptureOutput::File(path) => {

@@ -2,7 +2,10 @@ use eyre::Result;
 
 use crate::drm_kms::types::{CaptureOptions, CaptureOutput};
 
-use super::pipeline::{CapturePipeline, DrmEglPipeline};
+use super::{
+    pipeline::{CapturePipeline, DrmEglPipeline},
+    signals::CaptureControl,
+};
 
 pub struct RecordingSession {
     options: CaptureOptions,
@@ -21,8 +24,8 @@ impl RecordingSession {
         Self { options, pipeline }
     }
 
-    pub fn run(self) -> Result<()> {
-        self.pipeline.run(self.options)
+    pub fn run(self, control: CaptureControl) -> Result<()> {
+        self.pipeline.run(self.options, control)
     }
 
     pub fn is_preview(&self) -> bool {

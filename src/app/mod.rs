@@ -2,15 +2,18 @@ pub mod app;
 pub mod cli;
 pub mod config;
 pub mod pipeline;
+pub mod signals;
+
+use std::path::PathBuf;
 
 use eyre::Result;
 
 use crate::{
     drm_kms::{probe, types::CaptureOutput},
-    wayland::layer::init_wayland,
+    wayland::layer::{init_wayland, TrackingControl},
 };
 
-use self::{app::RecordingSession, cli::{Cli, Commands}};
+use self::{app::RecordingSession, cli::{Cli, Commands}, signals::CaptureControl};
 
 pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -27,14 +30,20 @@ pub fn run(cli: Cli) -> Result<()> {
                 capture,
                 CaptureOutput::File(output),
             )?;
-            RecordingSession::new(options)?.run()
+            let control = CaptureControl::register().map_err(|e| eyre::eyre!(e))?;
+            RecordingSession::new(options)?.run(control)
         }
         Commands::Preview { capture } => {
             let options = config::build_capture_options(capture, CaptureOutput::Preview)?;
-            RecordingSession::new(options)?.run()
+            let control = CaptureControl::register().map_err(|e| eyre::eyre!(e))?;
+            RecordingSession::new(options)?.run(control)
         }
         Commands::Test { sync_frequency_hz } => {
-            init_wayland(sync_frequency_hz)?;
+            init_wayland(
+                sync_frequency_hz,
+                &PathBuf::from("/tmp/openstudio-cursor.jsonl"),
+                TrackingControl::idle(),
+            )?;
             Ok(())
         }
     }
