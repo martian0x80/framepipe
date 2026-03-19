@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use std::thread;
 use std::time::Instant;
+use std::collections::HashSet;
 
 use gstreamer::prelude::*;
 use gstreamer::{self as gst, glib};
@@ -149,10 +150,48 @@ fn qsv_encoder_name(codec: &VideoCodec) -> &'static str {
     }
 }
 
+fn encoder_supported_props(factory_name: &str) -> Option<HashSet<String>> {
+    let factory = gst::ElementFactory::find(factory_name)?;
+    let elem = factory.create().build().ok()?;
+    Some(
+        elem.list_properties()
+            .into_iter()
+            .map(|p| p.name().to_string())
+            .collect(),
+    )
+}
+
+fn render_encoder_props(factory_name: &str, props: Vec<(&'static str, String)>) -> String {
+    let Some(supported) = encoder_supported_props(factory_name) else {
+        return props
+            .into_iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+    };
+
+    props
+        .into_iter()
+        .filter_map(|(k, v)| {
+            if supported.contains(k) {
+                Some(format!("{k}={v}"))
+            } else {
+                log::debug!(
+                    "dropping unsupported property '{}' for encoder '{}'",
+                    k,
+                    factory_name
+                );
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn is_codec_supported(backend: &EncoderBackend, codec: &VideoCodec) -> bool {
     match (backend, codec) {
         (EncoderBackend::Vaapi, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
-        (EncoderBackend::Qsv, VideoCodec::H264 | VideoCodec::H265) => true,
+        (EncoderBackend::Qsv, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
         (EncoderBackend::Vulkan, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
         (EncoderBackend::Cpu, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
         _ => false,
@@ -251,12 +290,14 @@ fn vaapi_rate_control(mode: &BitrateMode, codec: &VideoCodec) -> Result<&'static
         | (VideoCodec::H265, BitrateMode::Cqp)
         | (VideoCodec::Av1, BitrateMode::Cqp) => Ok("cqp"),
         (VideoCodec::H264, BitrateMode::Vcm) | (VideoCodec::H265, BitrateMode::Vcm) => Ok("vcm"),
-        (VideoCodec::H264, BitrateMode::Icq) | (VideoCodec::H265, BitrateMode::Icq) => Ok("icq"),
+        (VideoCodec::H264, BitrateMode::Icq)
+        | (VideoCodec::H265, BitrateMode::Icq)
+        | (VideoCodec::Av1, BitrateMode::Icq) => Ok("icq"),
         (VideoCodec::H264, BitrateMode::Qvbr) | (VideoCodec::H265, BitrateMode::Qvbr) => Ok("qvbr"),
         (VideoCodec::H264, BitrateMode::Default) | (VideoCodec::H265, BitrateMode::Default) => {
             Ok("icq")
         }
-        (VideoCodec::Av1, BitrateMode::Default) => Ok("cqp"),
+        (VideoCodec::Av1, BitrateMode::Default) => Ok("icq"),
         _ => Err(EncodeError::Bus(format!(
             "rate-control {:?} is not supported for vaapi {:?}",
             mode, codec
@@ -295,15 +336,15 @@ fn cpu_rate_control(mode: &BitrateMode) -> Result<&'static str, EncodeError> {
 
 fn qsv_rate_control(mode: &BitrateMode, codec: &VideoCodec) -> Result<&'static str, EncodeError> {
     match (codec, mode) {
-        (VideoCodec::H264, BitrateMode::Cbr) | (VideoCodec::H265, BitrateMode::Cbr) => Ok("cbr"),
-        (VideoCodec::H264, BitrateMode::Vbr) | (VideoCodec::H265, BitrateMode::Vbr) => Ok("vbr"),
-        (VideoCodec::H264, BitrateMode::Cqp) | (VideoCodec::H265, BitrateMode::Cqp) => Ok("cqp"),
+        (VideoCodec::H264, BitrateMode::Cbr) | (VideoCodec::H265, BitrateMode::Cbr) | (VideoCodec::Av1, BitrateMode::Cbr) => Ok("cbr"),
+        (VideoCodec::H264, BitrateMode::Vbr) | (VideoCodec::H265, BitrateMode::Vbr) | (VideoCodec::Av1, BitrateMode::Vbr) => Ok("vbr"),
+        (VideoCodec::H264, BitrateMode::Cqp) | (VideoCodec::H265, BitrateMode::Cqp) | (VideoCodec::Av1, BitrateMode::Cqp) => Ok("cqp"),
         (VideoCodec::H264, BitrateMode::Icq) | (VideoCodec::H265, BitrateMode::Icq) => Ok("icq"),
         (VideoCodec::H264, BitrateMode::Qvbr) | (VideoCodec::H265, BitrateMode::Qvbr) => {
             Ok("qvbr")
         }
         (VideoCodec::H264, BitrateMode::Vcm) | (VideoCodec::H265, BitrateMode::Vcm) => Ok("vcm"),
-        (_, BitrateMode::Default) => Ok("icq"),
+        (_, BitrateMode::Default) => Ok("cqp"),
         _ => Err(EncodeError::Bus(format!(
             "rate-control {:?} is not supported for qsv {:?}",
             mode, codec
@@ -314,7 +355,12 @@ fn qsv_rate_control(mode: &BitrateMode, codec: &VideoCodec) -> Result<&'static s
 #[derive(Clone, Copy)]
 struct QualityTuning {
     qpi: u32,
+    qpp: u32,
+    qpb: u32,
+    min_qp: u32,
     max_qp: u32,
+    i_frames: u32,
+    b_frames: u32,
     target_usage: u32,
     icq_quality: u32,
     qvbr_quality: u32,
@@ -323,34 +369,66 @@ struct QualityTuning {
 fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
     match preset {
         QualityPreset::Low => QualityTuning {
-            qpi: 14,
-            max_qp: 20,
+            qpi: 20,
+            qpp: 28,
+            qpb: 0,
+            min_qp: 15,
+            max_qp: 35,
+            i_frames: 15,
+            b_frames: 0,
             target_usage: 4,
             icq_quality: 28,
             qvbr_quality: 28,
         },
         QualityPreset::Medium => QualityTuning {
-            qpi: 10,
-            max_qp: 15,
-            target_usage: 1,
+            qpi: 16,
+            qpp: 20,
+            qpb: 0,
+            min_qp: 10,
+            max_qp: 25,
+            i_frames: 20,
+            b_frames: 0,
+            target_usage: 4,
             icq_quality: 14,
             qvbr_quality: 14,
         },
         QualityPreset::High => QualityTuning {
-            qpi: 5,
-            max_qp: 10,
-            target_usage: 1,
+            qpi: 11,
+            qpp: 18,
+            qpb: 0,
+            min_qp: 10,
+            max_qp: 20,
+            i_frames: 25,
+            b_frames: 0,
+            target_usage: 3,
             icq_quality: 7,
             qvbr_quality: 7,
         },
         QualityPreset::Ultra => QualityTuning {
             qpi: 1,
+            qpp: 1,
+            qpb: 0,
+            min_qp: 1,
             max_qp: 5,
+            // gpu struggles :(
+            i_frames: 30,
+            b_frames: 0,
             target_usage: 1,
             icq_quality: 1,
             qvbr_quality: 1,
         },
     }
+}
+
+fn quality_tuning_for(
+    _backend: &EncoderBackend,
+    _codec: &VideoCodec,
+    _mode: &BitrateMode,
+    preset: &QualityPreset,
+) -> QualityTuning {
+    // Keep this resolver entrypoint so backend/codec/mode-specific tuning can be
+    // reintroduced without touching call sites.
+    quality_tuning(preset)
 }
 
 fn default_rate_control_for(
@@ -359,11 +437,11 @@ fn default_rate_control_for(
 ) -> BitrateMode {
     match (backend, codec) {
         (EncoderBackend::Vaapi, VideoCodec::H264 | VideoCodec::H265) => BitrateMode::Icq,
-        (EncoderBackend::Vaapi, VideoCodec::Av1) => BitrateMode::Cqp,
+        (EncoderBackend::Vaapi, VideoCodec::Av1) => BitrateMode::Icq,
         (EncoderBackend::Qsv, VideoCodec::H264 | VideoCodec::H265) => BitrateMode::Icq,
         (EncoderBackend::Vulkan, _) => BitrateMode::Cqp,
         (EncoderBackend::Cpu, _) => BitrateMode::Qual,
-        (EncoderBackend::Qsv, VideoCodec::Av1) => BitrateMode::Icq,
+        (EncoderBackend::Qsv, VideoCodec::Av1) => BitrateMode::Cqp,
     }
 }
 
@@ -411,14 +489,19 @@ impl GstEncoder {
             );
         }
         let colorimetry = options.colorimetry.to_string();
-        let tuning = quality_tuning(&options.quality);
+        let tuning = quality_tuning_for(
+            &options.encoder_backend,
+            &options.video_codec,
+            &options.bitrate_mode,
+            &options.quality,
+        );
 
         let w = ex.width.max(1);
         let h = ex.height.max(1);
         if w > 1920 || h > 1200 {
             if options.encoder_backend == EncoderBackend::Cpu {
                 log::warn!(
-                    "Resolution {}x{} may be too large for cpu to handle efficiently; consider using vaapi or vulkan backend for better performance",
+                    "Resolution {}x{} may be too large for cpu to handle efficiently; consider using vaapi, qsv or vulkan backend for better performance",
                     w,
                     h
                 );
@@ -441,36 +524,84 @@ impl GstEncoder {
                 let rc = vaapi_rate_control(&options.bitrate_mode, &options.video_codec)?;
                 let enc = vaapi_encoder_name(&options.video_codec);
                 let range = options.color_range.to_string();
-                let vaapi_rc_quality_props = match options.bitrate_mode {
-                    // Clamp max-qp for quality consistency.
-                    BitrateMode::Cbr => {
-                        format!(
-                            "target-usage={} min-qp=1 max-qp={} qpi={}",
-                            tuning.target_usage, tuning.max_qp, tuning.qpi
-                        )
+                let mut vaapi_props: Vec<(&'static str, String)> = vec![
+                    ("rate-control", rc.to_string()),
+                    ("bitrate", bitrate.to_string()),
+                    ("key-int-max", gop.to_string()),
+                ];
+                if options.video_codec == VideoCodec::Av1 {
+                    match options.bitrate_mode {
+                        BitrateMode::Cbr => {
+                            vaapi_props.push(("target-usage", tuning.target_usage.to_string()));
+                            vaapi_props.push(("min-qp", tuning.min_qp.to_string()));
+                            vaapi_props.push(("max-qp", tuning.max_qp.to_string()));
+                            vaapi_props.push(("qp", tuning.qpi.to_string()));
+                        }
+                        BitrateMode::Vbr => {
+                            vaapi_props.push(("target-usage", tuning.target_usage.to_string()));
+                            vaapi_props.push(("target-percentage", "100".to_string()));
+                            vaapi_props.push(("min-qp", tuning.min_qp.to_string()));
+                            vaapi_props.push(("max-qp", tuning.max_qp.to_string()));
+                            vaapi_props.push(("qp", tuning.qpi.to_string()));
+                        }
+                        BitrateMode::Cqp => {
+                            vaapi_props.push(("target-usage", tuning.target_usage.to_string()));
+                            vaapi_props.push(("min-qp", tuning.min_qp.to_string()));
+                            vaapi_props.push(("max-qp", tuning.max_qp.to_string()));
+                            vaapi_props.push(("qp", tuning.qpi.to_string()));
+                        }
+                        BitrateMode::Icq => {
+                            vaapi_props.push(("target-usage", tuning.target_usage.to_string()));
+                            vaapi_props.push(("min-qp", tuning.min_qp.to_string()));
+                            vaapi_props.push(("max-qp", tuning.max_qp.to_string()));
+                            vaapi_props.push(("qp", tuning.qpi.to_string()));
+                        }
+                        _ => {}
                     }
-                    BitrateMode::Vbr | BitrateMode::Qvbr => {
-                        format!(
-                            "target-usage={} target-percentage=100 min-qp=1 max-qp={} qpi={}",
-                            tuning.target_usage, tuning.max_qp, tuning.qpi
-                        )
+                } else {
+                    // TODO: debug why setting i-frames and b-frames seems to crash encoder
+                    // vaapi_props.push(("i-frames", tuning.i_frames.to_string()));
+                    // vaapi_props.push(("b-frames", tuning.b_frames.to_string()));
+                    match options.bitrate_mode {
+                        // Clamp max-qp for quality consistency.
+                        BitrateMode::Cbr => {
+                            vaapi_props.push(("target-usage", tuning.target_usage.to_string()));
+                            vaapi_props.push(("min-qp", tuning.min_qp.to_string()));
+                            vaapi_props.push(("max-qp", tuning.max_qp.to_string()));
+                            vaapi_props.push(("qpi", tuning.qpi.to_string()));
+                        }
+                        BitrateMode::Vbr | BitrateMode::Qvbr => {
+                            vaapi_props.push(("target-usage", tuning.target_usage.to_string()));
+                            vaapi_props.push(("target-percentage", "100".to_string()));
+                            vaapi_props.push(("min-qp", tuning.min_qp.to_string()));
+                            vaapi_props.push(("max-qp", tuning.max_qp.to_string()));
+                            vaapi_props.push(("qpi", tuning.qpi.to_string()));
+                        }
+                        BitrateMode::Icq => {
+                            vaapi_props.push(("target-usage", tuning.target_usage.to_string()));
+                            vaapi_props.push(("min-qp", tuning.min_qp.to_string()));
+                            vaapi_props.push(("max-qp", tuning.max_qp.to_string()));
+                            vaapi_props.push(("qpi", tuning.qpi.to_string()));
+                        }
+                        BitrateMode::Cqp => {
+                            vaapi_props.push(("target-usage", tuning.target_usage.to_string()));
+                            vaapi_props.push(("min-qp", tuning.min_qp.to_string()));
+                            vaapi_props.push(("max-qp", tuning.max_qp.to_string()));
+                            vaapi_props.push(("qpi", tuning.qpi.to_string()));
+                            // only available in cqp
+                            // dont set qpb without setting b-frames, gstreamer seems to not like that
+                            // vaapi_props.push(("qpb", tuning.qpb.to_string()));
+                            vaapi_props.push(("qpp", tuning.qpp.to_string()));
+                        }
+                        _ => {}
                     }
-                    BitrateMode::Icq => {
-                        format!(
-                            "target-usage={} min-qp=1 max-qp={} qpi={}",
-                            tuning.target_usage, tuning.max_qp, tuning.qpi
-                        )
-                    }
-                    BitrateMode::Cqp => {
-                        format!("min-qp=1 max-qp={} qpi={}", tuning.max_qp, tuning.qpi)
-                    }
-                    _ => String::new(),
-                };
+                }
+                let vaapi_props = render_encoder_props(enc, vaapi_props);
                 format!(
                     concat!(
                         "! vapostproc ",
                         "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
-                        "! {enc} name=enc rate-control={rc} bitrate={bitrate} key-int-max={gop} {vaapi_rc_quality_props} ",
+                        "! {enc} name=enc {vaapi_props} ",
                         "! {parser} "
                     ),
                     w = w,
@@ -479,10 +610,7 @@ impl GstEncoder {
                     range = range,
                     colorimetry = colorimetry,
                     enc = enc,
-                    rc = rc,
-                    bitrate = bitrate,
-                    gop = gop,
-                    vaapi_rc_quality_props = vaapi_rc_quality_props.as_str(),
+                    vaapi_props = vaapi_props.as_str(),
                     parser = parser,
                 )
             }
@@ -490,29 +618,46 @@ impl GstEncoder {
                 let rc = qsv_rate_control(&options.bitrate_mode, &options.video_codec)?;
                 let enc = qsv_encoder_name(&options.video_codec);
                 let range = options.color_range.to_string();
-                let qsv_quality_props = match options.bitrate_mode {
-                    BitrateMode::Icq => format!(
-                        "icq-quality={} max-qp-i={} max-qp-p={} max-qp-b={} target-usage={} low-latency=true",
-                        tuning.icq_quality, tuning.max_qp, tuning.max_qp, tuning.max_qp, tuning.target_usage
-                    ),
-                    BitrateMode::Cqp => format!(
-                        "qp-i={} qp-p={} qp-b={} max-qp-i={} max-qp-p={} max-qp-b={} target-usage={} low-latency=true",
-                        tuning.qpi, tuning.qpi, tuning.qpi, tuning.max_qp, tuning.max_qp, tuning.max_qp, tuning.target_usage
-                    ),
-                    BitrateMode::Qvbr => format!(
-                        "qvbr-quality={} max-qp-i={} max-qp-p={} max-qp-b={} target-usage={} low-latency=true",
-                        tuning.qvbr_quality, tuning.max_qp, tuning.max_qp, tuning.max_qp, tuning.target_usage
-                    ),
-                    _ => format!(
-                        "max-qp-i={} max-qp-p={} max-qp-b={} target-usage={} low-latency=true",
-                        tuning.max_qp, tuning.max_qp, tuning.max_qp, tuning.target_usage
-                    ),
-                };
+                let mut qsv_props: Vec<(&'static str, String)> = vec![
+                    ("rate-control", rc.to_string()),
+                    ("bitrate", bitrate.to_string()),
+                    ("gop-size", gop.to_string()),
+                    ("low-latency", "true".to_string()),
+                    ("target-usage", tuning.target_usage.to_string()),
+                ];
+                match options.bitrate_mode {
+                    BitrateMode::Icq => {
+                        qsv_props.push(("icq-quality", tuning.icq_quality.to_string()));
+                        qsv_props.push(("max-qp-i", tuning.max_qp.to_string()));
+                        qsv_props.push(("max-qp-p", tuning.max_qp.to_string()));
+                        qsv_props.push(("max-qp-b", tuning.max_qp.to_string()));
+                    }
+                    BitrateMode::Cqp => {
+                        qsv_props.push(("qp-i", tuning.qpi.to_string()));
+                        qsv_props.push(("qp-p", tuning.qpp.to_string()));
+                        qsv_props.push(("qp-b", tuning.qpb.to_string()));
+                        qsv_props.push(("max-qp-i", tuning.max_qp.to_string()));
+                        qsv_props.push(("max-qp-p", tuning.max_qp.to_string()));
+                        qsv_props.push(("max-qp-b", tuning.max_qp.to_string()));
+                    }
+                    BitrateMode::Qvbr => {
+                        qsv_props.push(("qvbr-quality", tuning.qvbr_quality.to_string()));
+                        qsv_props.push(("max-qp-i", tuning.max_qp.to_string()));
+                        qsv_props.push(("max-qp-p", tuning.max_qp.to_string()));
+                        qsv_props.push(("max-qp-b", tuning.max_qp.to_string()));
+                    }
+                    _ => {
+                        qsv_props.push(("max-qp-i", tuning.max_qp.to_string()));
+                        qsv_props.push(("max-qp-p", tuning.max_qp.to_string()));
+                        qsv_props.push(("max-qp-b", tuning.max_qp.to_string()));
+                    }
+                }
+                let qsv_props = render_encoder_props(enc, qsv_props);
                 format!(
                     concat!(
                         "! vapostproc ",
                         "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
-                        "! {enc} name=enc rate-control={rc} bitrate={bitrate} gop-size={gop} {qsv_quality_props} ",
+                        "! {enc} name=enc {qsv_props} ",
                         "! {parser} "
                     ),
                     w = w,
@@ -521,10 +666,7 @@ impl GstEncoder {
                     range = range,
                     colorimetry = colorimetry,
                     enc = enc,
-                    rc = rc,
-                    bitrate = bitrate,
-                    gop = gop,
-                    qsv_quality_props = qsv_quality_props.as_str(),
+                    qsv_props = qsv_props.as_str(),
                     parser = parser,
                 )
             }
