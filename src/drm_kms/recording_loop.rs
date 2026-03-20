@@ -110,7 +110,7 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
 
     let inflight_slots = crate::encode::recommended_slots(&enc_opts).max(3);
     log::info!(
-        "Using {} in-flight render surfaces to delay reuse until encoder catches up",
+        "Using {} in-flight render surfaces",
         inflight_slots
     );
     let mut pipelines: Vec<gpu_pipeline::GpuPipeline> = Vec::with_capacity(inflight_slots);

@@ -72,11 +72,11 @@ pub struct CaptureArgs {
     pub bitrate_mode: BitrateMode,
     #[arg(short = 'q', long, default_value_t = QualityPreset::High)]
     pub quality: QualityPreset,
-    #[arg(short = 'c', long, default_value_t = ColorRange::Full)]
+    #[arg(long, default_value_t = ColorRange::Full)]
     pub color_range: ColorRange,
-    #[arg(long, default_value_t = Colorimetry::Bt709)]
+    #[arg(short = 'i', long, default_value_t = Colorimetry::Bt709)]
     pub colorimetry: Colorimetry,
-    #[arg(long, default_value_t = EncoderBackend::Vaapi)]
+    #[arg(short = 'e', long, default_value_t = EncoderBackend::Vaapi)]
     pub encoder_backend: EncoderBackend,
     #[arg(short = 'v', long, default_value_t = VideoCodec::H264)]
     pub video_codec: VideoCodec,
