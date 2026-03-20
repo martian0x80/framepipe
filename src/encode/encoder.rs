@@ -385,7 +385,7 @@ fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
             qpb: 0,
             min_qp: 32,
             max_qp: 51,
-            i_frames: 30,
+            i_frames: 60,
             b_frames: 0,
             target_usage: 7,
             icq_quality: 28,
@@ -397,7 +397,7 @@ fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
             qpb: 0,
             min_qp: 22,
             max_qp: 36,
-            i_frames: 20,
+            i_frames: 60,
             b_frames: 0,
             target_usage: 5,
             icq_quality: 14,
@@ -409,7 +409,7 @@ fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
             qpb: 0,
             min_qp: 16,
             max_qp: 32,
-            i_frames: 25,
+            i_frames: 60,
             b_frames: 0,
             target_usage: 3,
             icq_quality: 7,
@@ -528,7 +528,8 @@ impl GstEncoder {
                 );
             }
         }
-        let gop = tuning.i_frames.max(1);
+        // let gop = tuning.i_frames.max(1);
+        let gop = fps * 4;
         let ring_slots = recommended_slots(&options) as u64;
         let (parser, decoder) = codec_elements(&options.video_codec);
         let encode_chain = match options.encoder_backend {

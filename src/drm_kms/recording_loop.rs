@@ -282,7 +282,7 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
         }
 
         if fb_id != prev_fb_id {
-            log::debug!("frame {}: fb changed {} -> {}", frame_idx, prev_fb_id, fb_id);
+            log::trace!("frame {}: fb changed {} -> {}", frame_idx, prev_fb_id, fb_id);
             prev_fb_id = fb_id;
         } else {
             log::trace!("frame {}: fb unchanged {}", frame_idx, fb_id);
@@ -293,7 +293,7 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
             encoder.request_keyframe("periodic");
             last_forced_keyframe_frame = frame_idx;
         }
-        log::debug!("Captured frame {} (fb {})", frame_idx, fb_id);
+        log::trace!("Captured frame {} (fb {})", frame_idx, fb_id);
 
         next_deadline += frame_period;
         let now = Instant::now();
