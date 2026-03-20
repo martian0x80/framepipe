@@ -203,7 +203,7 @@ fn is_codec_supported(backend: &EncoderBackend, codec: &VideoCodec) -> bool {
     match (backend, codec) {
         (EncoderBackend::Vaapi, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
         (EncoderBackend::Qsv, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
-        (EncoderBackend::Vulkan, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
+        (EncoderBackend::Vulkan, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => false, // never tested
         (EncoderBackend::Cpu, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
         _ => false,
     }
@@ -380,26 +380,26 @@ struct QualityTuning {
 fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
     match preset {
         QualityPreset::Low => QualityTuning {
-            qpi: 35,
-            qpp: 40,
+            qpi: 33,
+            qpp: 35,
             qpb: 0,
-            min_qp: 32,
-            max_qp: 51,
-            i_frames: 60,
+            min_qp: 22,
+            max_qp: 36,
+            i_frames: 90,
             b_frames: 0,
-            target_usage: 7,
+            target_usage: 4,
             icq_quality: 28,
             qvbr_quality: 28,
         },
         QualityPreset::Medium => QualityTuning {
-            qpi: 30,
+            qpi: 28,
             qpp: 32,
             qpb: 0,
-            min_qp: 22,
+            min_qp: 28,
             max_qp: 36,
             i_frames: 60,
             b_frames: 0,
-            target_usage: 5,
+            target_usage: 4,
             icq_quality: 14,
             qvbr_quality: 14,
         },
@@ -409,7 +409,7 @@ fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
             qpb: 0,
             min_qp: 16,
             max_qp: 32,
-            i_frames: 60,
+            i_frames: 30,
             b_frames: 0,
             target_usage: 3,
             icq_quality: 7,
@@ -422,7 +422,7 @@ fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
             min_qp: 1,
             max_qp: 5,
             // gpu struggles :(
-            i_frames: 30,
+            i_frames: 15,
             b_frames: 0,
             target_usage: 1,
             icq_quality: 1,
@@ -528,8 +528,8 @@ impl GstEncoder {
                 );
             }
         }
-        // let gop = tuning.i_frames.max(1);
-        let gop = fps * 4;
+        let gop = tuning.i_frames.max(1);
+        // let gop = fps * 4;
         let ring_slots = recommended_slots(&options) as u64;
         let (parser, decoder) = codec_elements(&options.video_codec);
         let encode_chain = match options.encoder_backend {
@@ -575,7 +575,7 @@ impl GstEncoder {
                 } else {
                     // TODO: debug why setting i-frames makes the encoder shit itself
                     // vaapi_props.push(("i-frames", tuning.i_frames.to_string()));
-                    vaapi_props.push(("b-frames", tuning.b_frames.to_string()));
+                    // vaapi_props.push(("b-frames", tuning.b_frames.to_string()));
                     vaapi_props.push(("ref-frames", "1".to_string()));
                     match options.bitrate_mode {
                         // Clamp max-qp for quality consistency.
