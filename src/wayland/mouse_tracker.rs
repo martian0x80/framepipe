@@ -1,18 +1,21 @@
-use std::fs::File;
+use std::fs;
 use std::io::{BufWriter, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use input::event::Event;
 use input::event::pointer::PointerEvent;
+use input::event::Event;
 use input::{Libinput, LibinputInterface};
 use log::{debug, info, warn};
 
-use crate::wayland::types::{MouseSample, MouseState, MouseTracker};
+use crate::wayland::types::{
+    MouseSample, MouseSampleRecord, MouseState, MouseTrackChunk, MouseTrackHeader,
+    MouseTrackRecordingInfo, MouseTracker,
+};
 
 struct LibinputIface;
 
@@ -72,23 +75,71 @@ impl MouseTrackerLibinput {
             st.x, st.y
         );
     }
+
+    fn write_framed<W: Write>(writer: &mut W, payload: &[u8]) -> Result<(), String> {
+        let len = payload.len() as u32;
+        writer
+            .write_all(&len.to_le_bytes())
+            .map_err(|e| format!("failed to write mouse track frame length: {e}"))?;
+        writer
+            .write_all(payload)
+            .map_err(|e| format!("failed to write mouse track frame payload: {e}"))?;
+        Ok(())
+    }
+
+    fn flush_chunk<W: Write>(
+        writer: &mut W,
+        pending: &mut Vec<MouseSampleRecord>,
+    ) -> Result<(), String> {
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let chunk = MouseTrackChunk {
+            samples: std::mem::take(pending),
+        };
+        let bytes = bitcode::encode(&chunk);
+        Self::write_framed(writer, &bytes)?;
+        writer
+            .flush()
+            .map_err(|e| format!("failed to flush mouse track chunk: {e}"))?;
+        Ok(())
+    }
 }
 
 impl MouseTracker for MouseTrackerLibinput {
-    // TODO: add error enum instead of stringly-typed errors.
-    fn start<T: AsRef<std::path::Path>>(file_path: T) -> Result<Self, String> {
+    fn start<T: AsRef<std::path::Path>>(
+        file_path: T,
+        recording: MouseTrackRecordingInfo,
+    ) -> Result<Self, String> {
         let state = Arc::new(Mutex::new(MouseState::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
         let state_clone = Arc::clone(&state);
         let stop_clone = Arc::clone(&stop);
         let paused_clone = Arc::clone(&paused);
-        let file = File::create(file_path).map_err(|e| format!("failed to create mouse tracking file: {e}"))?;
-        let mut writer = BufWriter::new(file);
+        let file_path = PathBuf::from(file_path.as_ref());
 
         let thread = thread::Builder::new()
             .name("mouse-tracker-libinput".to_string())
             .spawn(move || {
+                let file = match fs::File::create(&file_path) {
+                    Ok(file) => file,
+                    Err(e) => {
+                        warn!("failed to create mouse track file {}: {e}", file_path.display());
+                        return;
+                    }
+                };
+                let mut writer = BufWriter::new(file);
+                let header = MouseTrackHeader {
+                    version: 1,
+                    recording,
+                };
+                let header_bytes = bitcode::encode(&header);
+                if let Err(e) = Self::write_framed(&mut writer, &header_bytes) {
+                    warn!("failed to write mouse track header: {e}");
+                    return;
+                }
+
                 let mut li = Libinput::new_with_udev(LibinputIface);
                 if let Err(e) = li.udev_assign_seat("seat0") {
                     warn!("libinput: failed to assign seat0: {:?}", e);
@@ -97,18 +148,19 @@ impl MouseTracker for MouseTrackerLibinput {
 
                 let batch_window = Duration::from_millis(8);
                 let mut batch_start = Instant::now();
+                let tracker_start = batch_start;
                 let mut batch_dx = 0.0_f64;
                 let mut batch_dy = 0.0_f64;
+                let mut pending: Vec<MouseSampleRecord> = Vec::with_capacity(256);
                 let mut was_paused = false;
 
                 while !stop_clone.load(Ordering::Relaxed) {
                     let is_paused = paused_clone.load(Ordering::Relaxed);
                     if is_paused && !was_paused {
-                        if let Err(e) = writer.flush() {
+                        if let Err(e) = Self::flush_chunk(&mut writer, &mut pending) {
                             warn!("mouse tracker pause flush failed: {e}");
-                        } else {
-                            info!("mouse tracker paused: buffered samples flushed");
                         }
+                        info!("mouse tracker paused");
                     } else if !is_paused && was_paused {
                         info!("mouse tracker resumed");
                     }
@@ -178,21 +230,23 @@ impl MouseTracker for MouseTrackerLibinput {
                                     batch_window.as_millis()
                                 );
 
-                                let sample = MouseSample {
-                                    x: st.x,
-                                    y: st.y,
-                                    anchored: st.anchored,
-                                    timestamp: now,
-                                };
-
-                                drop(st); // release lock before file I/O
-
                                 if !is_paused {
-                                    // Sync to file after each batch update, if recording.
-                                    if let Err(e) = Self::write_sample(&mut writer, &sample) {
-                                        warn!("failed to write mouse sample: {e}");
-                                    } else if let Err(e) = writer.flush() {
-                                        warn!("failed to flush mouse sample: {e}");
+                                    let t_ns = now
+                                        .duration_since(tracker_start)
+                                        .as_nanos()
+                                        .min(u64::MAX as u128)
+                                        as u64;
+                                    pending.push(MouseSampleRecord {
+                                        t_ns,
+                                        x: st.x,
+                                        y: st.y,
+                                        anchored: st.anchored,
+                                    });
+                                    if pending.len() >= 512 {
+                                        if let Err(e) = Self::flush_chunk(&mut writer, &mut pending)
+                                        {
+                                            warn!("mouse tracker chunk flush failed: {e}");
+                                        }
                                     }
                                 }
                             }
@@ -203,10 +257,13 @@ impl MouseTracker for MouseTrackerLibinput {
                     }
                 }
 
+                if let Err(e) = Self::flush_chunk(&mut writer, &mut pending) {
+                    warn!("mouse tracker final chunk flush failed: {e}");
+                }
                 if let Err(e) = writer.flush() {
-                    warn!("mouse tracker final flush failed: {e}");
+                    warn!("mouse tracker final writer flush failed: {e}");
                 } else {
-                    debug!("mouse tracker final flush complete");
+                    info!("mouse tracker bitcode written to {}", file_path.display());
                 }
                 debug!("mouse tracker thread exiting");
             })
@@ -243,13 +300,6 @@ impl MouseTracker for MouseTrackerLibinput {
             anchored: st.anchored,
             timestamp: Instant::now(),
         }
-    }
-    
-    fn write_sample<W: std::io::Write>(w: &mut W, sample: &MouseSample) -> Result<(), String>
-    {
-        serde_json::to_writer(&mut *w, &sample).map_err(|e| format!("failed to serialize mouse sample: {e}"))?;
-        w.write_all("\n".as_bytes()).map_err(|e| format!("failed to write newline after mouse sample: {e}"))?;
-        Ok(())
     }
 }
 

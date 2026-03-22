@@ -6,7 +6,7 @@ use std::{
         atomic::Ordering,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::app::signals::CaptureControl;
@@ -16,6 +16,7 @@ use crate::drm_kms::{
     types::{CaptureOptions, CaptureOutput},
 };
 use crate::wayland::layer::{init_wayland, TrackingControl};
+use crate::wayland::types::MouseTrackRecordingInfo;
 
 use super::egl_context::{
     delete_gl_texture, import_current_capture_texture, init_egl, EglCtx, EglError,
@@ -43,10 +44,33 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
     let _mouse_tracking_worker = if options.mouse_tracking {
         let tracking_path = options.mouse_tracking_file.clone();
         let sync_frequency_hz = options.wayland_sync_frequency;
+        let started_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis().min(u64::MAX as u128) as u64)
+            .unwrap_or(0);
+        let recording_info = MouseTrackRecordingInfo {
+            started_unix_ms,
+            output_path: match &options.output {
+                CaptureOutput::File(path) => Some(path.to_string_lossy().into_owned()),
+                CaptureOutput::Preview => None,
+            },
+            card_path: Some(options.card_path.clone()),
+            connector: options.connector.clone(),
+            fps: Some(options.fps),
+            width: options.output_width,
+            height: options.output_height,
+            encoder_backend: Some(options.encoder_backend.to_string()),
+            video_codec: Some(options.video_codec.to_string()),
+        };
         let tracking_control =
             TrackingControl::new(control.stop_requested.clone(), control.paused.clone());
         let handle = thread::spawn(move || {
-            if let Err(e) = init_wayland(sync_frequency_hz, &tracking_path, tracking_control) {
+            if let Err(e) = init_wayland(
+                sync_frequency_hz,
+                &tracking_path,
+                tracking_control,
+                recording_info,
+            ) {
                 log::error!("Failed to initialize Wayland mouse tracking: {e}");
             }
         });

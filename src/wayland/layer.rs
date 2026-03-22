@@ -16,7 +16,10 @@ use smithay_client_toolkit::{
         wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface},
     }, shm::{Shm, ShmHandler, slot::SlotPool}
 };
-use crate::wayland::{mouse_tracker::MouseTrackerLibinput, types::MouseTracker};
+use crate::wayland::{
+    mouse_tracker::MouseTrackerLibinput,
+    types::{MouseTrackRecordingInfo, MouseTracker},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WaylandError {
@@ -82,11 +85,12 @@ pub fn init_wayland(
     sync_frequency_hz: f64,
     file_path: &std::path::PathBuf,
     control: TrackingControl,
+    recording: MouseTrackRecordingInfo,
 ) -> Result<(), WaylandError> {
     info!("Initializing Wayland connection and event loop");
     info!("Mouse tracking output file: {}", file_path.to_string_lossy());
     // Start libinput tracker first so we can replay deltas after first absolute anchor.
-    let mouse_tracker = MouseTrackerLibinput::start(file_path)
+    let mouse_tracker = MouseTrackerLibinput::start(file_path, recording)
         .map_err(|_| WaylandError::ConnectionFailed)?;
 
     let conn = Connection::connect_to_env().map_err(|_| WaylandError::ConnectionFailed)?;

@@ -10,7 +10,10 @@ use eyre::Result;
 
 use crate::{
     drm_kms::{probe, types::CaptureOutput},
-    wayland::layer::{init_wayland, TrackingControl},
+    wayland::{
+        layer::{init_wayland, TrackingControl},
+        types::MouseTrackRecordingInfo,
+    },
 };
 
 use self::{app::RecordingSession, cli::{Cli, Commands}, signals::CaptureControl};
@@ -41,9 +44,26 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Test { sync_frequency_hz } => {
             init_wayland(
                 sync_frequency_hz,
-                &PathBuf::from("/tmp/openstudio-cursor.jsonl"),
+                &PathBuf::from("/tmp/openstudio-cursor.bitcode"),
                 TrackingControl::idle(),
+                MouseTrackRecordingInfo::default(),
             )?;
+            Ok(())
+        }
+        Commands::Postfx {
+            input,
+            output,
+            options,
+        } => {
+            log::info!(
+                "Postfx setup ready: input={} output={} events={} effect={:?} sprite={:?} smoothing_ms={}",
+                input.display(),
+                output.display(),
+                options.mouse_track.display(),
+                options.effect,
+                options.sprite,
+                options.smoothing_ms
+            );
             Ok(())
         }
     }
