@@ -78,8 +78,12 @@ pub struct PostfxArgs {
     pub spotlight_softness: f32,
     #[arg(short = 'e', long, default_value_t = EncoderBackend::Qsv)]
     pub encoder_backend: EncoderBackend,
+    #[arg(long, default_value_t = EncoderBackend::Vaapi)]
+    pub decode_backend: EncoderBackend,
     #[arg(short = 'v', long, default_value_t = VideoCodec::H264)]
     pub video_codec: VideoCodec,
+    #[arg(long)]
+    pub decode_codec: Option<VideoCodec>,
     #[arg(short = 'q', long, default_value_t = QualityPreset::High)]
     pub quality: QualityPreset,
     #[arg(short = 'r', long = "rate-control", default_value_t = BitrateMode::Default)]
@@ -88,6 +92,8 @@ pub struct PostfxArgs {
     pub bitrate_kbps: u32,
     #[arg(long, default_value_t = 60)]
     pub fps: u32,
+    #[arg(short = 'f', long, default_value_t = FrameRateMode::Cfr)]
+    pub frame_rate_mode: FrameRateMode,
     #[arg(long, default_value_t = ColorRange::Full)]
     pub color_range: ColorRange,
     #[arg(short = 'i', long, default_value_t = Colorimetry::Bt709)]

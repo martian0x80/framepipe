@@ -79,5 +79,20 @@ pub fn build_postfx_setup(
             spotlight_radius_px: options.spotlight_radius_px,
             spotlight_softness: options.spotlight_softness,
         },
+        transcode: crate::postfx::renderer::PostFxTranscodeConfig {
+            decode_backend: options.decode_backend,
+            decode_codec: options.decode_codec.clone(),
+            encode: crate::encode::EncoderOptions {
+                fps: options.fps,
+                bitrate_kbps: options.bitrate_kbps,
+                frame_rate_mode: options.frame_rate_mode,
+                bitrate_mode: options.bitrate_mode,
+                quality: options.quality,
+                color_range: options.color_range,
+                colorimetry: options.colorimetry,
+                encoder_backend: options.encoder_backend,
+                video_codec: options.video_codec,
+            },
+        },
     })
 }
