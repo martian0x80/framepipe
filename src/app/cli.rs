@@ -131,7 +131,7 @@ pub struct CaptureArgs {
     pub color_range: ColorRange,
     #[arg(short = 'i', long, default_value_t = Colorimetry::Bt709)]
     pub colorimetry: Colorimetry,
-    #[arg(short = 'e', long, default_value_t = EncoderBackend::Vaapi)]
+    #[arg(short = 'e', long, default_value_t = EncoderBackend::Qsv)]
     pub encoder_backend: EncoderBackend,
     #[arg(short = 'v', long, default_value_t = VideoCodec::H264)]
     pub video_codec: VideoCodec,

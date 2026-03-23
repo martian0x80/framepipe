@@ -10,6 +10,7 @@ use eyre::Result;
 
 use crate::{
     drm_kms::{probe, types::CaptureOutput},
+    postfx::renderer,
     wayland::{
         layer::{init_wayland, TrackingControl},
         types::MouseTrackRecordingInfo,
@@ -55,16 +56,8 @@ pub fn run(cli: Cli) -> Result<()> {
             output,
             options,
         } => {
-            log::info!(
-                "Postfx setup ready: input={} output={} events={} effect={:?} sprite={:?} smoothing_ms={}",
-                input.display(),
-                output.display(),
-                options.mouse_track.display(),
-                options.effect,
-                options.sprite,
-                options.smoothing_ms
-            );
-            Ok(())
+            let setup = config::build_postfx_setup(input, output, options)?;
+            renderer::apply_postfx(setup).map_err(Into::into)
         }
     }
 }

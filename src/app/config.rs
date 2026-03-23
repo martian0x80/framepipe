@@ -2,9 +2,12 @@ use std::path::PathBuf;
 
 use eyre::Result;
 
-use crate::drm_kms::{
-    probe,
-    types::{CaptureOptions, CaptureOutput},
+use crate::{
+    app::cli::PostfxArgs,
+    drm_kms::{
+        probe,
+        types::{CaptureOptions, CaptureOutput},
+    },
 };
 
 use super::cli::CaptureArgs;
@@ -50,5 +53,31 @@ pub fn build_capture_options(capture: CaptureArgs, output: CaptureOutput) -> Res
         mouse_tracking: capture.mouse_tracking,
         wayland_sync_frequency: capture.wayland_sync_frequency,
         mouse_tracking_file: PathBuf::from(capture.mouse_tracking_file),
+    })
+}
+
+pub fn build_postfx_setup(
+    input: PathBuf,
+    output: PathBuf,
+    options: PostfxArgs,
+) -> Result<crate::postfx::renderer::PostFxSetup> {
+    Ok(crate::postfx::renderer::PostFxSetup {
+        input,
+        output,
+        mouse_track: options.mouse_track,
+        mouse: crate::postfx::types::MouseEffectConfig {
+            effect: options.effect,
+            sprite_path: options.sprite,
+            blend_mode: options.blend_mode,
+            opacity: options.opacity,
+            scale: options.scale,
+            hotspot_x: options.hotspot_x,
+            hotspot_y: options.hotspot_y,
+            smoothing_ms: options.smoothing_ms,
+            zoom_factor: options.zoom_factor,
+            zoom_radius_px: options.zoom_radius_px,
+            spotlight_radius_px: options.spotlight_radius_px,
+            spotlight_softness: options.spotlight_softness,
+        },
     })
 }
