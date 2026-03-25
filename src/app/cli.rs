@@ -143,6 +143,8 @@ pub struct CaptureArgs {
     pub video_codec: VideoCodec,
     #[arg(short = 'm', long, default_value_t = false)]
     pub mouse_tracking: bool,
+    #[arg(long, default_value_t = false)]
+    pub cursor_composition: bool,
     #[arg(long, default_value_t = 0.1, help = "Frequency to sync mouse tracking data to Wayland layer (in Hz)")]
     pub wayland_sync_frequency: f64,
     #[arg(long, default_value = "openstudio-cursor.bitcode", help = "File path to write mouse tracking data to")]

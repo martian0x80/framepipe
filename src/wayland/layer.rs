@@ -20,6 +20,7 @@ use crate::wayland::{
     mouse_tracker::MouseTrackerLibinput,
     types::{MouseTrackRecordingInfo, MouseTracker},
 };
+use crate::shared::mouse_ring::RingBuffer;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WaylandError {
@@ -86,11 +87,12 @@ pub fn init_wayland(
     file_path: &std::path::PathBuf,
     control: TrackingControl,
     recording: MouseTrackRecordingInfo,
+    ring: Option<Arc<RingBuffer>>,
 ) -> Result<(), WaylandError> {
     info!("Initializing Wayland connection and event loop");
     info!("Mouse tracking output file: {}", file_path.to_string_lossy());
     // Start libinput tracker first so we can replay deltas after first absolute anchor.
-    let mouse_tracker = MouseTrackerLibinput::start(file_path, recording)
+    let mouse_tracker = MouseTrackerLibinput::start(file_path, recording, ring)
         .map_err(|_| WaylandError::ConnectionFailed)?;
 
     let conn = Connection::connect_to_env().map_err(|_| WaylandError::ConnectionFailed)?;
@@ -376,7 +378,12 @@ impl SeatHandler for WaylandState {
         &mut self.seat_state
     }
 
-    fn new_seat(&mut self, conn: &Connection, qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>, seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat) {
+    fn new_seat(
+        &mut self,
+        conn: &Connection,
+        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
+    ) {
     }
 
     fn new_capability(
@@ -386,7 +393,7 @@ impl SeatHandler for WaylandState {
         seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
         capability: smithay_client_toolkit::seat::Capability,
     ) {
-       if capability == smithay_client_toolkit::seat::Capability::Pointer {
+        if capability == smithay_client_toolkit::seat::Capability::Pointer {
             info!("Pointer capability added to seat");
             let pointer = self.seat_state.get_pointer(&qh, &seat).unwrap();
             self.pointer = Some(pointer);
@@ -406,7 +413,12 @@ impl SeatHandler for WaylandState {
         }
     }
 
-    fn remove_seat(&mut self, conn: &Connection, qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>, seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat) {
+    fn remove_seat(
+        &mut self,
+        conn: &Connection,
+        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
+    ) {
         if let Some(pointer) = self.pointer.take() {
             pointer.release();
         }
@@ -417,7 +429,9 @@ impl WaylandState {
     fn set_input_region_full(&self, qh: &QueueHandle<Self>) {
         let region = self.compositor_state.wl_compositor().create_region(qh, ());
         region.add(0, 0, self.width as i32, self.height as i32);
-        self.layer_surface.wl_surface().set_input_region(Some(&region));
+        self.layer_surface
+            .wl_surface()
+            .set_input_region(Some(&region));
         region.destroy();
         self.layer_surface.commit();
     }
@@ -425,7 +439,9 @@ impl WaylandState {
     fn set_input_region_clickthrough(&self, qh: &QueueHandle<Self>) {
         let region = self.compositor_state.wl_compositor().create_region(qh, ());
         // Empty input region => click-through.
-        self.layer_surface.wl_surface().set_input_region(Some(&region));
+        self.layer_surface
+            .wl_surface()
+            .set_input_region(Some(&region));
         region.destroy();
         self.layer_surface.commit();
     }
@@ -444,62 +460,65 @@ impl WaylandState {
         let w = box_size.min(self.width as i32 - x).max(1);
         let h = box_size.min(self.height as i32 - y).max(1);
         region.add(x, y, w, h);
-        self.layer_surface.wl_surface().set_input_region(Some(&region));
+        self.layer_surface
+            .wl_surface()
+            .set_input_region(Some(&region));
         region.destroy();
         self.layer_surface.commit();
     }
 
     pub fn draw(&mut self, qh: &QueueHandle<Self>) {
-    let width = self.width;
-    let height = self.height;
-    let stride = width as i32 * 4;
+        let width = self.width;
+        let height = self.height;
+        let stride = width as i32 * 4;
 
-    let (buffer, canvas) = self.pool
-        .create_buffer(
-            width as i32,
-            height as i32,
-            stride,
-            wl_shm::Format::Argb8888,
-        )
-        .expect("create buffer");
+        let (buffer, canvas) = self
+            .pool
+            .create_buffer(
+                width as i32,
+                height as i32,
+                stride,
+                wl_shm::Format::Argb8888,
+            )
+            .expect("create buffer");
 
-    // Fill buffer (transparent pixels)
-    for chunk in canvas.chunks_exact_mut(4) {
-        chunk.copy_from_slice(&[0, 0, 0, 0]);
+        // Fill buffer (transparent pixels)
+        for chunk in canvas.chunks_exact_mut(4) {
+            chunk.copy_from_slice(&[0, 0, 0, 0]);
+        }
+
+        // Mark the whole surface as damaged
+        self.layer_surface
+            .wl_surface()
+            .damage_buffer(0, 0, width as i32, height as i32);
+
+        // Request next frame (optional but common)
+        self.layer_surface
+            .wl_surface()
+            .frame(qh, self.layer_surface.wl_surface().clone());
+
+        // Attach buffer and commit
+        buffer
+            .attach_to(self.layer_surface.wl_surface())
+            .expect("buffer attach");
+
+        self.layer_surface.commit();
+
+        let mut sample = self.mouse_tracker.sample();
+        if sample.anchored && self.width > 0 && self.height > 0 {
+            // Keep reported cursor bounded to layer logical size.
+            sample.x = sample.x.clamp(0.0, self.width as f64);
+            sample.y = sample.y.clamp(0.0, self.height as f64);
+        }
+        if sample.anchored {
+            info!(
+                "Mouse tracker sample: ({:.2}, {:.2}) waiting_for_anchor={} size={}x{}",
+                sample.x, sample.y, self.waiting_for_anchor, self.width, self.height
+            );
+        } else {
+            warn!("Mouse tracker waiting for absolute anchor from layer pointer event");
+        }
     }
-
-    // Mark the whole surface as damaged
-    self.layer_surface
-        .wl_surface()
-        .damage_buffer(0, 0, width as i32, height as i32);
-
-    // Request next frame (optional but common)
-    self.layer_surface
-        .wl_surface()
-        .frame(qh, self.layer_surface.wl_surface().clone());
-
-    // Attach buffer and commit
-    buffer
-        .attach_to(self.layer_surface.wl_surface())
-        .expect("buffer attach");
-
-    self.layer_surface.commit();
-
-    let mut sample = self.mouse_tracker.sample();
-    if sample.anchored && self.width > 0 && self.height > 0 {
-        // Keep reported cursor bounded to layer logical size.
-        sample.x = sample.x.clamp(0.0, self.width as f64);
-        sample.y = sample.y.clamp(0.0, self.height as f64);
-    }
-    if sample.anchored {
-        info!(
-            "Mouse tracker sample: ({:.2}, {:.2}) waiting_for_anchor={} size={}x{}",
-            sample.x, sample.y, self.waiting_for_anchor, self.width, self.height
-        );
-    } else {
-        warn!("Mouse tracker waiting for absolute anchor from layer pointer event");
-    }
-}
 }
 
 delegate_compositor!(WaylandState);

@@ -1,11 +1,12 @@
 use eyre::Result;
 use clap::Parser;
 
-mod wayland;
+mod app;
 mod drm_kms;
 mod encode;
 mod postfx;
-mod app;
+mod shared;
+mod wayland;
 
 fn main() -> Result<()> {
     env_logger::builder().format_timestamp_nanos().filter_level(log::LevelFilter::Debug).init();

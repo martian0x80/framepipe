@@ -1,11 +1,105 @@
 use glow::HasContext;
 
+#[derive(Clone)]
 pub struct CursorState {
     pub tex: Option<glow::NativeTexture>,
-    pub x: f32, // pixels
-    pub y: f32, // pixels
-    pub w: f32, // pixels
-    pub h: f32, // pixels
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl CursorState {
+    pub fn empty() -> Self {
+        Self {
+            tex: None,
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+        }
+    }
+
+    pub fn with_position(tex: glow::NativeTexture, x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self {
+            tex: Some(tex),
+            x,
+            y,
+            w,
+            h,
+        }
+    }
+}
+
+pub fn create_default_cursor_texture(gl: &glow::Context) -> Result<glow::NativeTexture, String> {
+    let size = 24i32;
+    let mut pixels: Vec<u8> = vec![0u8; (size * size * 4) as usize];
+
+    for y in 0..size {
+        for x in 0..size {
+            let idx = ((y * size + x) * 4) as usize;
+            let dx = x as f32 - 2.0;
+            let dy = y as f32 - 2.0;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            if x < 4 && y >= x && y < size - x {
+                let alpha = if y < 12 { 255 } else { 180 };
+                pixels[idx] = 255;
+                pixels[idx + 1] = 255;
+                pixels[idx + 2] = 255;
+                pixels[idx + 3] = alpha;
+            } else if x >= 4 && y >= x - 4 && y < size - x + 4 && x < size - 8 {
+                let alpha = if y < x + 8 { 255 } else { 180 };
+                pixels[idx] = 0;
+                pixels[idx + 1] = 0;
+                pixels[idx + 2] = 0;
+                pixels[idx + 3] = alpha;
+            } else if dist < 4.0 {
+                let alpha = ((1.0 - dist / 4.0) * 200.0) as u8;
+                pixels[idx] = 255;
+                pixels[idx + 1] = 255;
+                pixels[idx + 2] = 255;
+                pixels[idx + 3] = alpha;
+            }
+        }
+    }
+
+    unsafe {
+        let tex = gl.create_texture().map_err(|e| e.to_string())?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA8 as i32,
+            size,
+            size,
+            0,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(Some(&pixels)),
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_S,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_T,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        Ok(tex)
+    }
 }
 
 pub struct GpuPipeline {

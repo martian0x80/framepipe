@@ -48,6 +48,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 &PathBuf::from("/tmp/openstudio-cursor.bitcode"),
                 TrackingControl::idle(),
                 MouseTrackRecordingInfo::default(),
+                None,
             )?;
             Ok(())
         }

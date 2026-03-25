@@ -1,8 +1,11 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Instant;
 
 use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+
+use crate::shared::mouse_ring::RingBuffer;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MouseSample {
@@ -66,6 +69,7 @@ pub trait MouseTracker {
     fn start<T: AsRef<std::path::Path>>(
         file_path: T,
         recording: MouseTrackRecordingInfo,
+        ring: Option<Arc<RingBuffer>>,
     ) -> Result<Self, String>
     where
         Self: Sized;

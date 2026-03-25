@@ -2,9 +2,7 @@ use glow::{HasContext, NativeTexture};
 use std::{
     fs,
     num::NonZero,
-    sync::{
-        atomic::Ordering,
-    },
+    sync::{atomic::Ordering, Arc},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -12,9 +10,11 @@ use std::{
 use crate::app::signals::CaptureControl;
 use crate::drm_kms::{
     debug, egl_dmabuf_export, gpu_pipeline,
+    gpu_pipeline::create_default_cursor_texture,
     probe::ProbeSession,
     types::{CaptureOptions, CaptureOutput},
 };
+use crate::shared::mouse_ring::RingBuffer;
 use crate::wayland::layer::{init_wayland, TrackingControl};
 use crate::wayland::types::MouseTrackRecordingInfo;
 
@@ -23,7 +23,7 @@ use super::egl_context::{
 };
 
 struct MouseTrackingWorker {
-    stop_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    stop_requested: Arc<std::sync::atomic::AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -40,7 +40,16 @@ impl Drop for MouseTrackingWorker {
     }
 }
 
-pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> Result<(), EglError> {
+pub fn run_capture_session(
+    options: CaptureOptions,
+    control: CaptureControl,
+) -> Result<(), EglError> {
+    let mouse_ring: Option<Arc<RingBuffer>> = if options.mouse_tracking {
+        Some(Arc::new(RingBuffer::new(4096)))
+    } else {
+        None
+    };
+
     let _mouse_tracking_worker = if options.mouse_tracking {
         let tracking_path = options.mouse_tracking_file.clone();
         let sync_frequency_hz = options.wayland_sync_frequency;
@@ -64,12 +73,14 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
         };
         let tracking_control =
             TrackingControl::new(control.stop_requested.clone(), control.paused.clone());
+        let ring_clone = mouse_ring.clone();
         let handle = thread::spawn(move || {
             if let Err(e) = init_wayland(
                 sync_frequency_hz,
                 &tracking_path,
                 tracking_control,
                 recording_info,
+                ring_clone,
             ) {
                 log::error!("Failed to initialize Wayland mouse tracking: {e}");
             }
@@ -143,18 +154,21 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
             .map_err(EglError::Pipeline)?);
     }
 
-    let cursor_state = gpu_pipeline::CursorState {
-        tex: None,
-        x: 0.0,
-        y: 0.0,
-        w: 0.0,
-        h: 0.0,
+    let cursor_size = 24.0f32;
+    let cursor_state_empty = gpu_pipeline::CursorState::empty();
+    let (cursor_tex, recording_start) = if options.cursor_composition {
+        let tex = unsafe { create_default_cursor_texture(&pipelines[0].gl) }
+            .map_err(EglError::Pipeline)?;
+        log::info!("Cursor composition enabled, created cursor texture");
+        (Some(tex), Some(Instant::now()))
+    } else {
+        (None, None)
     };
 
     let first_slot = 0usize;
     let fence = unsafe {
         pipelines[first_slot]
-            .render_with_cursor(NativeTexture(NonZero::new(texture).unwrap()), &cursor_state)
+            .render_with_cursor(NativeTexture(NonZero::new(texture).unwrap()), &cursor_state_empty)
     }
     .map_err(EglError::Pipeline)?;
     unsafe {
@@ -164,7 +178,10 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
             1_000_000_000,
         );
         if wait == glow::WAIT_FAILED || wait == glow::TIMEOUT_EXPIRED {
-            log::warn!("Initial frame GL fence wait returned {}, forcing glFinish()", wait);
+            log::warn!(
+                "Initial frame GL fence wait returned {}, forcing glFinish()",
+                wait
+            );
             pipelines[first_slot].gl.finish();
         }
         pipelines[first_slot].gl.delete_sync(fence);
@@ -248,6 +265,40 @@ pub fn run_capture_session(options: CaptureOptions, control: CaptureControl) -> 
                 source_w, source_h, frame_w, frame_h
             )));
         }
+
+        let cursor_state = if let (Some(ring), Some(ctex), Some(rec_start)) = (
+            mouse_ring.as_ref(),
+            cursor_tex.as_ref(),
+            recording_start.as_ref(),
+        ) {
+            let frame_pts_ns = rec_start.elapsed().as_nanos() as u64;
+            if let Some(event) = ring.latest_before(frame_pts_ns) {
+                log::trace!(
+                    "Frame {} at {}ns: mouse at ({:.1}, {:.1})",
+                    frame_idx,
+                    frame_pts_ns,
+                    event.x,
+                    event.y
+                );
+                let scale_x = output_w as f64 / source_w as f64;
+                let scale_y = output_h as f64 / source_h as f64;
+                let mx = (event.x * scale_x) as f32;
+                let my = (event.y * scale_y) as f32;
+                let cursor_x = mx;
+                let cursor_y = (output_h as f32) - my;
+                gpu_pipeline::CursorState::with_position(
+                    *ctex,
+                    cursor_x,
+                    cursor_y,
+                    cursor_size,
+                    cursor_size,
+                )
+            } else {
+                cursor_state_empty.clone()
+            }
+        } else {
+            cursor_state_empty.clone()
+        };
 
         let slot = (frame_idx as usize) % pipelines.len();
         let fence = unsafe {

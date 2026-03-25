@@ -12,6 +12,7 @@ use input::event::Event;
 use input::{Libinput, LibinputInterface};
 use log::{debug, info, warn};
 
+use crate::shared::mouse_ring::{MouseEvent, RingBuffer};
 use crate::wayland::types::{
     MouseSample, MouseSampleRecord, MouseState, MouseTrackChunk, MouseTrackHeader,
     MouseTrackRecordingInfo, MouseTracker,
@@ -110,6 +111,7 @@ impl MouseTracker for MouseTrackerLibinput {
     fn start<T: AsRef<std::path::Path>>(
         file_path: T,
         recording: MouseTrackRecordingInfo,
+        ring: Option<Arc<RingBuffer>>,
     ) -> Result<Self, String> {
         let state = Arc::new(Mutex::new(MouseState::default()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -146,7 +148,7 @@ impl MouseTracker for MouseTrackerLibinput {
                     return;
                 }
 
-                let batch_window = Duration::from_millis(8);
+                let batch_window = Duration::from_millis(5);
                 let mut batch_start = Instant::now();
                 let tracker_start = batch_start;
                 let mut batch_dx = 0.0_f64;
@@ -236,17 +238,25 @@ impl MouseTracker for MouseTrackerLibinput {
                                         .as_nanos()
                                         .min(u64::MAX as u128)
                                         as u64;
-                                    pending.push(MouseSampleRecord {
+                                    let record = MouseSampleRecord {
                                         t_ns,
                                         x: st.x,
                                         y: st.y,
                                         anchored: st.anchored,
-                                    });
+                                    };
+                                    pending.push(record);
                                     if pending.len() >= 512 {
                                         if let Err(e) = Self::flush_chunk(&mut writer, &mut pending)
                                         {
                                             warn!("mouse tracker chunk flush failed: {e}");
                                         }
+                                    }
+                                    if let Some(ref ring) = ring {
+                                        ring.push(MouseEvent {
+                                            t_ns,
+                                            x: st.x,
+                                            y: st.y,
+                                        });
                                     }
                                 }
                             }

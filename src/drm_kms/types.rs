@@ -1,9 +1,9 @@
-use std::os::fd::OwnedFd;
-use std::os::unix::io::{AsFd, BorrowedFd};
-use std::fs::{File, OpenOptions};
-use std::path::PathBuf;
 use drm::control::Device as ControlDevice;
 use drm::Device as BasicDevice;
+use std::fs::{File, OpenOptions};
+use std::os::fd::OwnedFd;
+use std::os::unix::io::{AsFd, BorrowedFd};
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub(crate) struct Card(File);
@@ -19,10 +19,7 @@ impl ControlDevice for Card {}
 
 impl Card {
     pub fn open(path: &str) -> std::io::Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)?;
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
         Ok(Card(file))
     }
 }
@@ -210,6 +207,7 @@ pub struct CaptureOptions {
     pub encoder_backend: EncoderBackend,
     pub video_codec: VideoCodec,
     pub mouse_tracking: bool,
+    pub cursor_composition: bool,
     pub wayland_sync_frequency: f64,
     pub mouse_tracking_file: PathBuf,
 }
