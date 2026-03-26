@@ -2,6 +2,7 @@ use glow::{HasContext, NativeTexture};
 use std::{
     fs,
     num::NonZero,
+    path::Path,
     sync::{atomic::Ordering, Arc},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -27,6 +28,57 @@ struct MouseTrackingWorker {
     handle: Option<thread::JoinHandle<()>>,
 }
 
+fn create_cursor_texture_from_png(
+    gl: &glow::Context,
+    path: &Path,
+) -> Result<(glow::NativeTexture, f32, f32), String> {
+    let img = image::open(path)
+        .map_err(|e| format!("failed to load cursor sprite {}: {e}", path.display()))?
+        .to_rgba8();
+    let w = img.width() as i32;
+    let h = img.height() as i32;
+    if w <= 0 || h <= 0 {
+        return Err(format!("invalid cursor sprite dimensions for {}", path.display()));
+    }
+
+    unsafe {
+        let tex = gl.create_texture().map_err(|e| e.to_string())?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA8 as i32,
+            w,
+            h,
+            0,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(Some(img.as_raw())),
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_S,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_T,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        Ok((tex, w as f32, h as f32))
+    }
+}
+
 impl Drop for MouseTrackingWorker {
     fn drop(&mut self) {
         self.stop_requested.store(true, Ordering::Relaxed);
@@ -44,13 +96,20 @@ pub fn run_capture_session(
     options: CaptureOptions,
     control: CaptureControl,
 ) -> Result<(), EglError> {
-    let mouse_ring: Option<Arc<RingBuffer>> = if options.mouse_tracking {
+    let use_mouse_tracking = options.mouse_tracking || options.cursor_composition;
+
+    let mouse_ring: Option<Arc<RingBuffer>> = if use_mouse_tracking {
         Some(Arc::new(RingBuffer::new(4096)))
     } else {
         None
     };
 
-    let _mouse_tracking_worker = if options.mouse_tracking {
+    let _mouse_tracking_worker = if use_mouse_tracking {
+        if options.cursor_composition && !options.mouse_tracking {
+            log::info!(
+                "Cursor composition requested without --mouse-tracking; enabling internal mouse tracking automatically"
+            );
+        }
         let tracking_path = options.mouse_tracking_file.clone();
         let sync_frequency_hz = options.wayland_sync_frequency;
         let started_unix_ms = SystemTime::now()
@@ -154,16 +213,51 @@ pub fn run_capture_session(
             .map_err(EglError::Pipeline)?);
     }
 
-    let cursor_size = 24.0f32;
     let cursor_state_empty = gpu_pipeline::CursorState::empty();
-    let (cursor_tex, recording_start) = if options.cursor_composition {
-        let tex = unsafe { create_default_cursor_texture(&pipelines[0].gl) }
-            .map_err(EglError::Pipeline)?;
-        log::info!("Cursor composition enabled, created cursor texture");
-        (Some(tex), Some(Instant::now()))
+    let (cursor_tex, cursor_w, cursor_h, hotspot_x, hotspot_y) =
+        if options.cursor_composition {
+            let (tex, base_w, base_h, auto_hotspot) = if let Some(sprite_path) = options.cursor_sprite.as_ref() {
+                let (tex, w, h) = create_cursor_texture_from_png(&pipelines[0].gl, sprite_path)
+                    .map_err(EglError::Pipeline)?;
+                // Large cursor atlases are commonly centered with transparent borders.
+                // let auto_hotspot = if options.cursor_hotspot_x == 0 && options.cursor_hotspot_y == 0 {
+                //     Some((w * 0.5_f32, h * 0.5_f32))
+                // } else {
+                //     None
+                // };
+                log::info!(
+                    "Cursor composition enabled, using custom sprite {} ({}x{})",
+                    sprite_path.display(),
+                    w,
+                    h
+                );
+                (tex, w, h, Some((0.0, 0.0)))
+            } else {
+                let tex = unsafe { create_default_cursor_texture(&pipelines[0].gl) }
+                    .map_err(EglError::Pipeline)?;
+                log::info!("Cursor composition enabled, created default cursor texture");
+                (tex, 24.0_f32, 24.0_f32, None)
+            };
+
+            let scale = options.cursor_scale.max(0.1);
+            let out_w = base_w * scale;
+            let out_h = base_h * scale;
+            let (hotspot_x, hotspot_y) = if let Some((ax, ay)) = auto_hotspot {
+                log::info!(
+                    "Auto hotspot enabled for custom sprite: ({:.1}, {:.1}) before scale",
+                    ax, ay
+                );
+                (ax * scale, ay * scale)
+            } else {
+                (
+                    (options.cursor_hotspot_x as f32 * scale).max(0.0),
+                    (options.cursor_hotspot_y as f32 * scale).max(0.0),
+                )
+            };
+            (Some(tex), out_w, out_h, hotspot_x, hotspot_y)
     } else {
-        (None, None)
-    };
+            (None, 0.0, 0.0, 0.0, 0.0)
+        };
 
     let first_slot = 0usize;
     let fence = unsafe {
@@ -266,33 +360,26 @@ pub fn run_capture_session(
             )));
         }
 
-        let cursor_state = if let (Some(ring), Some(ctex), Some(rec_start)) = (
-            mouse_ring.as_ref(),
-            cursor_tex.as_ref(),
-            recording_start.as_ref(),
-        ) {
-            let frame_pts_ns = rec_start.elapsed().as_nanos() as u64;
-            if let Some(event) = ring.latest_before(frame_pts_ns) {
-                log::trace!(
-                    "Frame {} at {}ns: mouse at ({:.1}, {:.1})",
-                    frame_idx,
-                    frame_pts_ns,
-                    event.x,
-                    event.y
-                );
+        let cursor_state = if let (Some(ring), Some(ctex)) = (mouse_ring.as_ref(), cursor_tex.as_ref()) {
+            if let Some(event) = ring.latest_before(u64::MAX) {
+                log::trace!("Frame {}: latest mouse at ({:.1}, {:.1})", frame_idx, event.x, event.y);
                 let scale_x = output_w as f64 / source_w as f64;
                 let scale_y = output_h as f64 / source_h as f64;
                 let mx = (event.x * scale_x) as f32;
                 let my = (event.y * scale_y) as f32;
                 // Tracker coordinates are already top-left oriented in output space.
-                let cursor_x = mx.clamp(0.0, output_w as f32);
-                let cursor_y = my.clamp(0.0, output_h as f32);
+                let min_x = (-cursor_w + 1.0).min(0.0);
+                let min_y = (-cursor_h + 1.0).min(0.0);
+                let max_x = (output_w as f32 - 1.0).max(min_x);
+                let max_y = (output_h as f32 - 1.0).max(min_y);
+                let cursor_x = (mx - hotspot_x).clamp(min_x, max_x);
+                let cursor_y = (my - hotspot_y).clamp(min_y, max_y);
                 gpu_pipeline::CursorState::with_position(
                     *ctex,
                     cursor_x,
                     cursor_y,
-                    cursor_size,
-                    cursor_size,
+                    cursor_w,
+                    cursor_h,
                 )
             } else {
                 cursor_state_empty.clone()
@@ -382,7 +469,7 @@ pub fn run_capture_session(
         .finish()
         .map_err(|e: crate::encode::EncodeError| EglError::Pipeline(e.to_string()))?;
 
-    let mouse_file = if options.mouse_tracking {
+    let mouse_file = if use_mouse_tracking {
         options.mouse_tracking_file.to_string_lossy().into_owned()
     } else {
         "disabled".to_string()

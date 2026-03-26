@@ -52,6 +52,10 @@ pub fn build_capture_options(capture: CaptureArgs, output: CaptureOutput) -> Res
         video_codec: capture.video_codec,
         mouse_tracking: capture.mouse_tracking,
         cursor_composition: capture.cursor_composition,
+        cursor_sprite: capture.cursor_sprite,
+        cursor_hotspot_x: capture.cursor_hotspot_x,
+        cursor_hotspot_y: capture.cursor_hotspot_y,
+        cursor_scale: capture.cursor_scale,
         wayland_sync_frequency: capture.wayland_sync_frequency,
         mouse_tracking_file: PathBuf::from(capture.mouse_tracking_file),
     })

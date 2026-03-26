@@ -158,7 +158,9 @@ impl GpuPipeline {
                     if (p.x >= cmin.x && p.y >= cmin.y && p.x < cmax.x && p.y < cmax.y) {
                         vec2 cuv = (p - cmin) / u_cursor_rect_px.zw;
                         vec4 c = texture(u_cursor, cuv);
-                        base = mix(base, c, c.a); // alpha blend
+                        float a = clamp(c.a, 0.0, 1.0);
+                        base.rgb = c.rgb * a + base.rgb * (1.0 - a);
+                        base.a = 1.0;
                     }
                 }
                 o = base;

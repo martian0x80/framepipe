@@ -208,6 +208,10 @@ pub struct CaptureOptions {
     pub video_codec: VideoCodec,
     pub mouse_tracking: bool,
     pub cursor_composition: bool,
+    pub cursor_sprite: Option<PathBuf>,
+    pub cursor_hotspot_x: i32,
+    pub cursor_hotspot_y: i32,
+    pub cursor_scale: f32,
     pub wayland_sync_frequency: f64,
     pub mouse_tracking_file: PathBuf,
 }
