@@ -465,6 +465,11 @@ pub fn run_capture_session(
         }
     }
 
+    delete_gl_texture(&egl, texture)
+        .map_err(|e| EglError::Pipeline(format!("failed to delete capture texture: {e}")))?;
+    delete_gl_texture(&egl, cursor_tex.unwrap().0.into())
+        .map_err(|e| EglError::Pipeline(format!("failed to delete cursor texture: {e}")))?;
+
     encoder
         .finish()
         .map_err(|e: crate::encode::EncodeError| EglError::Pipeline(e.to_string()))?;
