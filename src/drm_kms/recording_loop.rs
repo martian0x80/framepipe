@@ -284,8 +284,9 @@ pub fn run_capture_session(
                 let scale_y = output_h as f64 / source_h as f64;
                 let mx = (event.x * scale_x) as f32;
                 let my = (event.y * scale_y) as f32;
-                let cursor_x = mx;
-                let cursor_y = (output_h as f32) - my;
+                // Tracker coordinates are already top-left oriented in output space.
+                let cursor_x = mx.clamp(0.0, output_w as f32);
+                let cursor_y = my.clamp(0.0, output_h as f32);
                 gpu_pipeline::CursorState::with_position(
                     *ctex,
                     cursor_x,

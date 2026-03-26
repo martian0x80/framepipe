@@ -157,7 +157,7 @@ pub fn init_wayland(
                 state.resync_probe_mode = true;
                 state.resync_deadline = Some(Instant::now() + Duration::from_millis(120));
                 state.set_input_region_probe(&qh);
-                info!(
+                log::trace!(
                     "Periodic resync requested after {:?}; using probe input region",
                     period
                 );

@@ -57,23 +57,15 @@ impl MouseTrackerLibinput {
 
     pub fn anchor_absolute(&self, x: f64, y: f64, at: Instant) {
         let mut st = self.state.lock().expect("mouse tracker mutex poisoned");
-        let (dx_sum, dy_sum) = st
-            .history
-            .iter()
-            .filter(|(t, _, _)| *t >= at)
-            .fold((0.0_f64, 0.0_f64), |(sx, sy), (_, dx, dy)| {
-                (sx + *dx, sy + *dy)
-            });
         st.x = x;
         st.y = y;
         st.anchored = true;
-        // Replay only deltas observed after anchor timestamp.
-        st.x += dx_sum;
-        st.y += dy_sum;
+        st.history.clear();
+        st.anchor_epoch = st.anchor_epoch.wrapping_add(1);
         Self::clamp_to_bounds(&mut st);
         debug!(
-            "mouse tracker anchored at ({:.2}, {:.2}) with replay",
-            st.x, st.y
+            "mouse tracker anchored at ({:.2}, {:.2}) at {:?}; delta history reset (epoch={})",
+            st.x, st.y, at, st.anchor_epoch
         );
     }
 
@@ -155,8 +147,22 @@ impl MouseTracker for MouseTrackerLibinput {
                 let mut batch_dy = 0.0_f64;
                 let mut pending: Vec<MouseSampleRecord> = Vec::with_capacity(256);
                 let mut was_paused = false;
+                let mut seen_anchor_epoch = 0_u64;
 
                 while !stop_clone.load(Ordering::Relaxed) {
+                    {
+                        let st = state_clone.lock().expect("mouse tracker mutex poisoned");
+                        if st.anchor_epoch != seen_anchor_epoch {
+                            seen_anchor_epoch = st.anchor_epoch;
+                            batch_dx = 0.0;
+                            batch_dy = 0.0;
+                            debug!(
+                                "mouse tracker observed anchor epoch change -> {}, cleared pending batch deltas",
+                                seen_anchor_epoch
+                            );
+                        }
+                    }
+
                     let is_paused = paused_clone.load(Ordering::Relaxed);
                     if is_paused && !was_paused {
                         if let Err(e) = Self::flush_chunk(&mut writer, &mut pending) {
@@ -223,7 +229,7 @@ impl MouseTracker for MouseTrackerLibinput {
                                 st.y += batch_dy;
                                 // Clamp once after applying the whole batch.
                                 Self::clamp_to_bounds(&mut st);
-                                debug!(
+                                log::trace!(
                                     "mouse tracker calc pos -> ({:.2}, {:.2}) [batch_delta=({:.3}, {:.3}) window_ms={}]",
                                     st.x,
                                     st.y,

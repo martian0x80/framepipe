@@ -63,6 +63,7 @@ pub(crate) struct MouseState {
     pub max_x: Option<f64>,
     pub max_y: Option<f64>,
     pub history: VecDeque<(Instant, f64, f64)>,
+    pub anchor_epoch: u64,
 }
 
 pub trait MouseTracker {
