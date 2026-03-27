@@ -5,6 +5,8 @@ pub struct MouseEvent {
     pub t_ns: u64,
     pub x: f64,
     pub y: f64,
+    pub max_x: Option<f64>,
+    pub max_y: Option<f64>,
 }
 
 pub struct RingBuffer {

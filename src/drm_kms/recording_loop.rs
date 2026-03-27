@@ -363,10 +363,23 @@ pub fn run_capture_session(
         let cursor_state = if let (Some(ring), Some(ctex)) = (mouse_ring.as_ref(), cursor_tex.as_ref()) {
             if let Some(event) = ring.latest_before(u64::MAX) {
                 log::trace!("Frame {}: latest mouse at ({:.1}, {:.1})", frame_idx, event.x, event.y);
-                let scale_x = output_w as f64 / source_w as f64;
-                let scale_y = output_h as f64 / source_h as f64;
-                let mx = (event.x * scale_x) as f32;
-                let my = (event.y * scale_y) as f32;
+                // account for fractional scaling
+                let (mx, my) = if let (Some(max_x), Some(max_y)) = (event.max_x, event.max_y) {
+                    if max_x < 0.0 && max_y < 0.0 {
+                        (
+                            ((event.x / max_x).clamp(0.0, 1.0) * output_w as f64) as f32,
+                            ((event.y / max_y).clamp(0.0, 1.0) * output_h as f64) as f32,
+                        )
+                    } else {
+                        let scale_x = output_w as f64 / source_w as f64;
+                        let scale_y = output_h as f64 / source_h as f64;
+                        ((event.x * scale_x) as f32, (event.y * scale_y) as f32)
+                    }
+                } else {
+                    let scale_x = output_w as f64 / source_w as f64;
+                    let scale_y = output_h as f64 / source_h as f64;
+                    ((event.x * scale_x) as f32, (event.y * scale_y) as f32)
+                };
                 // Tracker coordinates are already top-left oriented in output space.
                 let min_x = (-cursor_w + 1.0).min(0.0);
                 let min_y = (-cursor_h + 1.0).min(0.0);
@@ -467,8 +480,10 @@ pub fn run_capture_session(
 
     delete_gl_texture(&egl, texture)
         .map_err(|e| EglError::Pipeline(format!("failed to delete capture texture: {e}")))?;
-    delete_gl_texture(&egl, cursor_tex.unwrap().0.into())
-        .map_err(|e| EglError::Pipeline(format!("failed to delete cursor texture: {e}")))?;
+    if let Some(ctex) = cursor_tex {
+        delete_gl_texture(&egl, ctex.0.into())
+                .map_err(|e| EglError::Pipeline(format!("failed to delete cursor texture: {e}")))?;
+    }
 
     encoder
         .finish()

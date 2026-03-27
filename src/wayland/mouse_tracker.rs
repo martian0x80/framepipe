@@ -262,6 +262,8 @@ impl MouseTracker for MouseTrackerLibinput {
                                             t_ns,
                                             x: st.x,
                                             y: st.y,
+                                            max_x: st.max_x,
+                                            max_y: st.max_y,
                                         });
                                     }
                                 }
