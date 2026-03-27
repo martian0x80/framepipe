@@ -365,7 +365,7 @@ pub fn run_capture_session(
                 log::trace!("Frame {}: latest mouse at ({:.1}, {:.1})", frame_idx, event.x, event.y);
                 // account for fractional scaling
                 let (mx, my) = if let (Some(max_x), Some(max_y)) = (event.max_x, event.max_y) {
-                    if max_x < 0.0 && max_y < 0.0 {
+                    if max_x > 0.0 && max_y > 0.0 {
                         (
                             ((event.x / max_x).clamp(0.0, 1.0) * output_w as f64) as f32,
                             ((event.y / max_y).clamp(0.0, 1.0) * output_h as f64) as f32,
