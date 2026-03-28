@@ -59,6 +59,13 @@ pub fn build_capture_options(
         cursor_hotspot_x: capture.cursor_hotspot_x,
         cursor_hotspot_y: capture.cursor_hotspot_y,
         cursor_scale: capture.cursor_scale,
+        cursor_smooth: capture.cursor_smooth,
+        cursor_spring_k: capture.cursor_spring_k,
+        cursor_spring_d: capture.cursor_spring_d,
+        cursor_max_speed: capture.cursor_max_speed,
+        cursor_snap_px: capture.cursor_snap_px,
+        cursor_smooth_ms: capture.cursor_smooth_ms,
+        cursor_deadzone_px: capture.cursor_deadzone_px,
         wayland_sync_frequency: capture.wayland_sync_frequency,
         mouse_tracking_file: PathBuf::from(capture.mouse_tracking_file),
     })

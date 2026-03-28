@@ -23,6 +23,86 @@ use super::egl_context::{
     EglCtx, EglError, delete_gl_texture, import_current_capture_texture, init_egl,
 };
 
+#[derive(Default, Clone, Copy)]
+struct CursorSmoother {
+    x: f32,
+    y: f32,
+    vx: f32,
+    vy: f32,
+    tx: f32,
+    ty: f32,
+    initialized: bool,
+}
+
+impl CursorSmoother {
+    fn update(
+        &mut self,
+        target_x: f32,
+        target_y: f32,
+        dt: f32,
+        k: f32,
+        d: f32,
+        max_speed: f32,
+        snap_px: f32,
+        smooth_ms: f32,
+        deadzone_px: f32,
+    ) -> (f32, f32) {
+        if !self.initialized {
+            self.x = target_x;
+            self.y = target_y;
+            self.vx = 0.0;
+            self.vy = 0.0;
+            self.tx = target_x;
+            self.ty = target_y;
+            self.initialized = true;
+            return (self.x, self.y);
+        }
+
+        let (tx, ty) = if smooth_ms > 0.0 {
+            let tau = (smooth_ms / 1000.0).max(0.001);
+            let alpha = 1.0 - (-dt / tau).exp();
+            self.tx = self.tx + (target_x - self.tx) * alpha;
+            self.ty = self.ty + (target_y - self.ty) * alpha;
+            (self.tx, self.ty)
+        } else {
+            (target_x, target_y)
+        };
+
+        let dx = tx - self.x;
+        let dy = ty - self.y;
+        let dist_sq = dx * dx + dy * dy;
+        if deadzone_px > 0.0 && dist_sq <= deadzone_px * deadzone_px {
+            // Kill micro jitter while keeping velocity under control.
+            self.vx *= 0.25;
+            self.vy *= 0.25;
+            return (self.x, self.y);
+        }
+        if snap_px > 0.0 && dist_sq > snap_px * snap_px {
+            self.x = tx;
+            self.y = ty;
+            self.vx = 0.0;
+            self.vy = 0.0;
+            return (self.x, self.y);
+        }
+
+        let fx = k * dx - d * self.vx;
+        let fy = k * dy - d * self.vy;
+        self.vx += fx * dt;
+        self.vy += fy * dt;
+
+        let speed_sq = self.vx * self.vx + self.vy * self.vy;
+        if max_speed > 0.0 && speed_sq > max_speed * max_speed {
+            let inv = max_speed / speed_sq.sqrt();
+            self.vx *= inv;
+            self.vy *= inv;
+        }
+
+        self.x += self.vx * dt;
+        self.y += self.vy * dt;
+        (self.x, self.y)
+    }
+}
+
 struct MouseTrackingWorker {
     stop_requested: Arc<std::sync::atomic::AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
@@ -216,6 +296,7 @@ pub fn run_capture_session(
     }
 
     let cursor_state_empty = gpu_pipeline::CursorState::empty();
+    let mut cursor_smoother = CursorSmoother::default();
     let (cursor_tex, cursor_w, cursor_h, hotspot_x, hotspot_y) = if options.cursor_composition {
         let (tex, base_w, base_h, auto_hotspot) =
             if let Some(sprite_path) = options.cursor_sprite.as_ref() {
@@ -333,6 +414,7 @@ pub fn run_capture_session(
     let mut next_deadline = Instant::now();
     let mut frame_idx: u64 = 0;
     let mut last_forced_keyframe_frame: u64 = 0;
+    let mut last_cursor_update = Instant::now();
     encoder
         .push_frame(&first_exported)
         .map_err(|e| EglError::Pipeline(e.to_string()))?;
@@ -398,8 +480,26 @@ pub fn run_capture_session(
                     let max_y = (output_h as f32 - 1.0).max(min_y);
                     let cursor_x = (mx - hotspot_x).clamp(min_x, max_x);
                     let cursor_y = (my - hotspot_y).clamp(min_y, max_y);
+                    let now = Instant::now();
+                    let dt = (now - last_cursor_update).as_secs_f32().clamp(0.0, 0.05);
+                    last_cursor_update = now;
+                    let (s_cursor_x, s_cursor_y) = if options.cursor_smooth {
+                        cursor_smoother.update(
+                            cursor_x,
+                            cursor_y,
+                            dt,
+                            options.cursor_spring_k,
+                            options.cursor_spring_d,
+                            options.cursor_max_speed,
+                            options.cursor_snap_px,
+                            options.cursor_smooth_ms,
+                            options.cursor_deadzone_px,
+                        )
+                    } else {
+                        (cursor_x, cursor_y)
+                    };
                     gpu_pipeline::CursorState::with_position(
-                        *ctex, cursor_x, cursor_y, cursor_w, cursor_h,
+                        *ctex, s_cursor_x, s_cursor_y, cursor_w, cursor_h,
                     )
                 } else {
                     cursor_state_empty.clone()

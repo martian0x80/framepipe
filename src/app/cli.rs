@@ -152,6 +152,20 @@ pub struct CaptureArgs {
     pub cursor_hotspot_y: i32,
     #[arg(long, default_value_t = 1.0, help = "Cursor sprite scale factor")]
     pub cursor_scale: f32,
+    #[arg(long, default_value_t = false, help = "Enable cursor smoothing")]
+    pub cursor_smooth: bool,
+    #[arg(long, default_value_t = 120.0, help = "Cursor spring stiffness (only used with --cursor-smooth)")]
+    pub cursor_spring_k: f32,
+    #[arg(long, default_value_t = 18.0, help = "Cursor spring damping (only used with --cursor-smooth)")]
+    pub cursor_spring_d: f32,
+    #[arg(long, default_value_t = 3000.0, help = "Cursor spring max speed (px/s, only used with --cursor-smooth)")]
+    pub cursor_max_speed: f32,
+    #[arg(long, default_value_t = 0.0, help = "Snap to target when distance exceeds this (px, only used with --cursor-smooth)")]
+    pub cursor_snap_px: f32,
+    #[arg(long, default_value_t = 12.0, help = "Cursor target smoothing time constant (ms, only used with --cursor-smooth)")]
+    pub cursor_smooth_ms: f32,
+    #[arg(long, default_value_t = 0.5, help = "Ignore jitter under this distance (px, only used with --cursor-smooth)")]
+    pub cursor_deadzone_px: f32,
     #[arg(
         long,
         default_value_t = 0.5,

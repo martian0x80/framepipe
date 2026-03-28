@@ -212,6 +212,13 @@ pub struct CaptureOptions {
     pub cursor_hotspot_x: i32,
     pub cursor_hotspot_y: i32,
     pub cursor_scale: f32,
+    pub cursor_smooth: bool,
+    pub cursor_spring_k: f32,
+    pub cursor_spring_d: f32,
+    pub cursor_max_speed: f32,
+    pub cursor_snap_px: f32,
+    pub cursor_smooth_ms: f32,
+    pub cursor_deadzone_px: f32,
     pub wayland_sync_frequency: f64,
     pub mouse_tracking_file: PathBuf,
 }
