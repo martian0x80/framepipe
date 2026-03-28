@@ -1,5 +1,3 @@
 pub mod encoder;
 
-pub use encoder::{
-    recommended_slots, EncodeError, EncoderOptions, EncoderOutput, GstEncoder,
-};
+pub use encoder::{EncodeError, EncoderOptions, EncoderOutput, GstEncoder, recommended_slots};

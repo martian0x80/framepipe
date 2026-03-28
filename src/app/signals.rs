@@ -1,7 +1,4 @@
-use std::sync::{
-    atomic::AtomicBool,
-    Arc,
-};
+use std::sync::{Arc, atomic::AtomicBool};
 
 use signal_hook::consts::signal::{SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
 use signal_hook::flag as signal_flag;

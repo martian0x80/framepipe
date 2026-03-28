@@ -1,9 +1,9 @@
-pub mod probe;
-pub(crate) mod egl_context;
-pub mod types;
-pub mod drm;
 pub(crate) mod debug;
-pub mod gpu_pipeline;
+pub mod drm;
+pub(crate) mod egl_context;
 pub mod egl_dmabuf_export;
+pub mod gpu_pipeline;
 pub mod gstreamer;
+pub mod probe;
 pub(crate) mod recording_loop;
+pub mod types;

@@ -2,7 +2,7 @@
 // wow this was probably most awful part of the codebase to write
 // i am just too dumb for this
 
-use gbm::{AsRaw};
+use gbm::AsRaw;
 use std::os::fd::{AsFd, AsRawFd};
 
 use crate::drm_kms::{

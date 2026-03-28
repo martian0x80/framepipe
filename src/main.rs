@@ -1,5 +1,5 @@
-use eyre::Result;
 use clap::Parser;
+use eyre::Result;
 
 mod app;
 mod drm_kms;
@@ -9,6 +9,9 @@ mod shared;
 mod wayland;
 
 fn main() -> Result<()> {
-    env_logger::builder().format_timestamp_nanos().filter_level(log::LevelFilter::Debug).init();
+    env_logger::builder()
+        .format_timestamp_nanos()
+        .filter_level(log::LevelFilter::Debug)
+        .init();
     app::run(app::cli::Cli::parse())
 }

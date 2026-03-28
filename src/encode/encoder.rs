@@ -1,7 +1,7 @@
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::thread;
 use std::time::Instant;
-use std::collections::HashSet;
 
 use gstreamer::prelude::*;
 use gstreamer::{self as gst, glib};
@@ -226,7 +226,12 @@ fn set_appsrc_caps(
     if ex.modifier == 0 {
         let raw_fallback = format!(
             "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
-            raw, ex.width, ex.height, fps, range, colorimetry.as_str()
+            raw,
+            ex.width,
+            ex.height,
+            fps,
+            range,
+            colorimetry.as_str()
         );
         if let Ok(caps) = gst::Caps::from_str(&raw_fallback) {
             log::debug!("Using appsrc caps (linear modifier fallback): {raw_fallback}");
@@ -239,7 +244,12 @@ fn set_appsrc_caps(
         let drm_with_mod = format!("{drm}:0x{:016x}", ex.modifier);
         let full_with_mod = format!(
             "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
-            drm_with_mod, ex.width, ex.height, fps, range, colorimetry.as_str()
+            drm_with_mod,
+            ex.width,
+            ex.height,
+            fps,
+            range,
+            colorimetry.as_str()
         );
         match gst::Caps::from_str(&full_with_mod) {
             Ok(caps) => {
@@ -254,7 +264,12 @@ fn set_appsrc_caps(
 
         let full = format!(
             "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
-            drm, ex.width, ex.height, fps, range, colorimetry.as_str()
+            drm,
+            ex.width,
+            ex.height,
+            fps,
+            range,
+            colorimetry.as_str()
         );
         match gst::Caps::from_str(&full) {
             Ok(caps) => {
@@ -270,7 +285,12 @@ fn set_appsrc_caps(
 
     let dmabuf_raw = format!(
         "video/x-raw(memory:DMABuf),format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
-        raw, ex.width, ex.height, fps, range, colorimetry.as_str()
+        raw,
+        ex.width,
+        ex.height,
+        fps,
+        range,
+        colorimetry.as_str()
     );
     if let Ok(caps) = gst::Caps::from_str(&dmabuf_raw) {
         log::debug!("Using appsrc caps: {dmabuf_raw}");
@@ -280,7 +300,12 @@ fn set_appsrc_caps(
 
     let raw_fallback = format!(
         "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
-        raw, ex.width, ex.height, fps, range, colorimetry.as_str()
+        raw,
+        ex.width,
+        ex.height,
+        fps,
+        range,
+        colorimetry.as_str()
     );
     let caps = gst::Caps::from_str(&raw_fallback)
         .map_err(|e| format!("fallback caps parse failed: {e}"))?;
@@ -347,13 +372,17 @@ fn cpu_rate_control(mode: &BitrateMode) -> Result<&'static str, EncodeError> {
 
 fn qsv_rate_control(mode: &BitrateMode, codec: &VideoCodec) -> Result<&'static str, EncodeError> {
     match (codec, mode) {
-        (VideoCodec::H264, BitrateMode::Cbr) | (VideoCodec::H265, BitrateMode::Cbr) | (VideoCodec::Av1, BitrateMode::Cbr) => Ok("cbr"),
-        (VideoCodec::H264, BitrateMode::Vbr) | (VideoCodec::H265, BitrateMode::Vbr) | (VideoCodec::Av1, BitrateMode::Vbr) => Ok("vbr"),
-        (VideoCodec::H264, BitrateMode::Cqp) | (VideoCodec::H265, BitrateMode::Cqp) | (VideoCodec::Av1, BitrateMode::Cqp) => Ok("cqp"),
+        (VideoCodec::H264, BitrateMode::Cbr)
+        | (VideoCodec::H265, BitrateMode::Cbr)
+        | (VideoCodec::Av1, BitrateMode::Cbr) => Ok("cbr"),
+        (VideoCodec::H264, BitrateMode::Vbr)
+        | (VideoCodec::H265, BitrateMode::Vbr)
+        | (VideoCodec::Av1, BitrateMode::Vbr) => Ok("vbr"),
+        (VideoCodec::H264, BitrateMode::Cqp)
+        | (VideoCodec::H265, BitrateMode::Cqp)
+        | (VideoCodec::Av1, BitrateMode::Cqp) => Ok("cqp"),
         (VideoCodec::H264, BitrateMode::Icq) | (VideoCodec::H265, BitrateMode::Icq) => Ok("icq"),
-        (VideoCodec::H264, BitrateMode::Qvbr) | (VideoCodec::H265, BitrateMode::Qvbr) => {
-            Ok("qvbr")
-        }
+        (VideoCodec::H264, BitrateMode::Qvbr) | (VideoCodec::H265, BitrateMode::Qvbr) => Ok("qvbr"),
         (VideoCodec::H264, BitrateMode::Vcm) | (VideoCodec::H265, BitrateMode::Vcm) => Ok("vcm"),
         (_, BitrateMode::Default) => Ok("cqp"),
         _ => Err(EncodeError::Bus(format!(
@@ -442,10 +471,7 @@ fn quality_tuning_for(
     quality_tuning(preset)
 }
 
-fn default_rate_control_for(
-    backend: &EncoderBackend,
-    codec: &VideoCodec,
-) -> BitrateMode {
+fn default_rate_control_for(backend: &EncoderBackend, codec: &VideoCodec) -> BitrateMode {
     match (backend, codec) {
         (EncoderBackend::Vaapi, VideoCodec::H264 | VideoCodec::H265) => BitrateMode::Icq,
         (EncoderBackend::Vaapi, VideoCodec::Av1) => BitrateMode::Icq,

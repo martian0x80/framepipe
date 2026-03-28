@@ -23,7 +23,10 @@ pub fn resolve_card_path(card: Option<String>) -> Result<String> {
         .ok_or_else(|| eyre::eyre!("no DRM cards found"))
 }
 
-pub fn build_capture_options(capture: CaptureArgs, output: CaptureOutput) -> Result<CaptureOptions> {
+pub fn build_capture_options(
+    capture: CaptureArgs,
+    output: CaptureOutput,
+) -> Result<CaptureOptions> {
     if capture.output_width.is_some() != capture.output_height.is_some() {
         return Err(eyre::eyre!(
             "both --output-width and --output-height must be set together"

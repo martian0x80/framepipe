@@ -12,12 +12,16 @@ use crate::{
     drm_kms::{probe, types::CaptureOutput},
     postfx::renderer,
     wayland::{
-        layer::{init_wayland, TrackingControl},
+        layer::{TrackingControl, init_wayland},
         types::MouseTrackRecordingInfo,
     },
 };
 
-use self::{app::RecordingSession, cli::{Cli, Commands}, signals::CaptureControl};
+use self::{
+    app::RecordingSession,
+    cli::{Cli, Commands},
+    signals::CaptureControl,
+};
 
 pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -30,10 +34,7 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Record { capture, output } => {
-            let options = config::build_capture_options(
-                capture,
-                CaptureOutput::File(output),
-            )?;
+            let options = config::build_capture_options(capture, CaptureOutput::File(output))?;
             let control = CaptureControl::register().map_err(|e| eyre::eyre!(e))?;
             RecordingSession::new(options)?.run(control)
         }

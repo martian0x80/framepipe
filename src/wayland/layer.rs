@@ -1,26 +1,39 @@
 use std::{
     os::fd::AsRawFd,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use log::{info, warn};
-use smithay_client_toolkit::{
-    compositor::{self, CompositorHandler}, delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry, delegate_seat, delegate_shm, output::{OutputHandler, OutputState}, reexports::{
-        client::{Connection, QueueHandle, delegate_dispatch, globals::registry_queue_init, protocol::{wl_pointer::WlPointer, wl_region, wl_shm}},
-    }, registry::{ProvidesRegistryState, RegistryState}, registry_handlers, seat::{SeatHandler, SeatState, pointer::PointerHandler}, shell::{
-        WaylandSurface,
-        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface},
-    }, shm::{Shm, ShmHandler, slot::SlotPool}
-};
+use crate::shared::mouse_ring::RingBuffer;
 use crate::wayland::{
     mouse_tracker::MouseTrackerLibinput,
     types::{MouseTrackRecordingInfo, MouseTracker},
 };
-use crate::shared::mouse_ring::RingBuffer;
+use log::{info, warn};
+use smithay_client_toolkit::{
+    compositor::{self, CompositorHandler},
+    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
+    delegate_seat, delegate_shm,
+    output::{OutputHandler, OutputState},
+    reexports::client::{
+        Connection, QueueHandle, delegate_dispatch,
+        globals::registry_queue_init,
+        protocol::{wl_pointer::WlPointer, wl_region, wl_shm},
+    },
+    registry::{ProvidesRegistryState, RegistryState},
+    registry_handlers,
+    seat::{SeatHandler, SeatState, pointer::PointerHandler},
+    shell::{
+        WaylandSurface,
+        wlr_layer::{
+            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+        },
+    },
+    shm::{Shm, ShmHandler, slot::SlotPool},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WaylandError {
@@ -90,7 +103,10 @@ pub fn init_wayland(
     ring: Option<Arc<RingBuffer>>,
 ) -> Result<(), WaylandError> {
     info!("Initializing Wayland connection and event loop");
-    info!("Mouse tracking output file: {}", file_path.to_string_lossy());
+    info!(
+        "Mouse tracking output file: {}",
+        file_path.to_string_lossy()
+    );
     // Start libinput tracker first so we can replay deltas after first absolute anchor.
     let mouse_tracker = MouseTrackerLibinput::start(file_path, recording, ring)
         .map_err(|_| WaylandError::ConnectionFailed)?;
@@ -150,8 +166,7 @@ pub fn init_wayland(
             .mouse_tracker
             .set_paused(control.paused.load(Ordering::Relaxed));
 
-        if let (Some(period), Some(last_anchor_at)) = (state.resync_period, state.last_anchor_at)
-        {
+        if let (Some(period), Some(last_anchor_at)) = (state.resync_period, state.last_anchor_at) {
             if !state.waiting_for_anchor && last_anchor_at.elapsed() >= period {
                 state.waiting_for_anchor = true;
                 state.resync_probe_mode = true;

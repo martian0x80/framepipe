@@ -101,7 +101,9 @@ pub(crate) fn debug_dump_texture_ppm(
             1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 1.0,
         ];
 
-        let vao = gl.create_vertex_array().map_err(|_| DebugEglError::Unknown)?;
+        let vao = gl
+            .create_vertex_array()
+            .map_err(|_| DebugEglError::Unknown)?;
         let vbo = gl.create_buffer().map_err(|_| DebugEglError::Unknown)?;
         gl.bind_vertex_array(Some(vao));
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
@@ -139,7 +141,9 @@ pub(crate) fn debug_dump_texture_ppm(
             glow::LINEAR as i32,
         );
 
-        let fbo = gl.create_framebuffer().map_err(|_| DebugEglError::Unknown)?;
+        let fbo = gl
+            .create_framebuffer()
+            .map_err(|_| DebugEglError::Unknown)?;
         gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
         gl.framebuffer_texture_2d(
             glow::FRAMEBUFFER,

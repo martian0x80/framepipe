@@ -2,8 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::drm_kms::types::{
-    BitrateMode, ColorRange, Colorimetry, EncoderBackend, FrameRateMode, QualityPreset,
-    VideoCodec,
+    BitrateMode, ColorRange, Colorimetry, EncoderBackend, FrameRateMode, QualityPreset, VideoCodec,
 };
 use crate::postfx::types::{BlendMode, MouseEffect};
 
@@ -153,8 +152,16 @@ pub struct CaptureArgs {
     pub cursor_hotspot_y: i32,
     #[arg(long, default_value_t = 1.0, help = "Cursor sprite scale factor")]
     pub cursor_scale: f32,
-    #[arg(long, default_value_t = 0.5, help = "Frequency to sync mouse tracking data to Wayland layer (in Hz)")]
+    #[arg(
+        long,
+        default_value_t = 0.5,
+        help = "Frequency to sync mouse tracking data to Wayland layer (in Hz)"
+    )]
     pub wayland_sync_frequency: f64,
-    #[arg(long, default_value = "openstudio-cursor.bitcode", help = "File path to write mouse tracking data to")]
+    #[arg(
+        long,
+        default_value = "openstudio-cursor.bitcode",
+        help = "File path to write mouse tracking data to"
+    )]
     pub mouse_tracking_file: String,
 }

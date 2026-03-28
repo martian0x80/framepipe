@@ -1,7 +1,7 @@
 use eyre::Result;
 
-use crate::drm_kms::{recording_loop, types::CaptureOptions};
 use crate::app::signals::CaptureControl;
+use crate::drm_kms::{recording_loop, types::CaptureOptions};
 
 pub trait CapturePipeline: Send + Sync {
     fn run(&self, options: CaptureOptions, control: CaptureControl) -> Result<()>;

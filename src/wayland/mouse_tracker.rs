@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use input::event::pointer::PointerEvent;
 use input::event::Event;
+use input::event::pointer::PointerEvent;
 use input::{Libinput, LibinputInterface};
 use log::{debug, info, warn};
 
@@ -26,7 +26,9 @@ impl LibinputInterface for LibinputIface {
             .map_err(|_| libc::EINVAL)?;
         let fd = unsafe { libc::open(c_path.as_ptr(), flags) };
         if fd < 0 {
-            return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO));
+            return Err(std::io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EIO));
         }
         Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }

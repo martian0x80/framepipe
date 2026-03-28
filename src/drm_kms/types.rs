@@ -1,5 +1,5 @@
-use drm::control::Device as ControlDevice;
 use drm::Device as BasicDevice;
+use drm::control::Device as ControlDevice;
 use std::fs::{File, OpenOptions};
 use std::os::fd::OwnedFd;
 use std::os::unix::io::{AsFd, BorrowedFd};

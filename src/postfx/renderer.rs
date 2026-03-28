@@ -216,8 +216,8 @@ pub fn decode_loop(
 }
 
 pub fn apply_postfx(setup: PostFxSetup) -> eyre::Result<()> {
-    let track =
-        load_mouse_track(&setup.mouse_track).map_err(|e| eyre::eyre!("failed to load mouse track: {e}"))?;
+    let track = load_mouse_track(&setup.mouse_track)
+        .map_err(|e| eyre::eyre!("failed to load mouse track: {e}"))?;
     log::info!(
         "Applying postfx with setup: input={} output={} samples={} effect={:?} decode_backend={:?} decode_codec={:?}",
         setup.input.display(),
@@ -227,7 +227,10 @@ pub fn apply_postfx(setup: PostFxSetup) -> eyre::Result<()> {
         setup.transcode.decode_backend,
         setup.transcode.decode_codec
     );
-    log::info!("[Postfx] reencode hint: {}", build_reencode_hint(&setup.transcode));
+    log::info!(
+        "[Postfx] reencode hint: {}",
+        build_reencode_hint(&setup.transcode)
+    );
     decode_loop(&setup.input.to_string_lossy(), &track, &setup.transcode)
         .map_err(|e| eyre::eyre!(e))
 }
