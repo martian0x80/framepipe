@@ -554,6 +554,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
+name = "framepipe"
+version = "0.1.0"
+dependencies = [
+ "bitcode",
+ "clap",
+ "ctrlc",
+ "drm",
+ "drm-sys",
+ "env_logger",
+ "eyre",
+ "fastrand",
+ "gbm",
+ "gl",
+ "glow",
+ "gstreamer",
+ "gstreamer-allocators",
+ "gstreamer-app",
+ "gstreamer-video",
+ "image",
+ "input",
+ "khronos-egl",
+ "libc",
+ "log",
+ "serde",
+ "serde_json",
+ "serde_millis",
+ "signal-hook",
+ "smithay-client-toolkit",
+ "thiserror",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1302,40 +1336,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "openstudio"
-version = "0.1.0"
-dependencies = [
- "bitcode",
- "clap",
- "ctrlc",
- "drm",
- "drm-sys",
- "env_logger",
- "eyre",
- "fastrand",
- "gbm",
- "gl",
- "glow",
- "gstreamer",
- "gstreamer-allocators",
- "gstreamer-app",
- "gstreamer-video",
- "image",
- "input",
- "khronos-egl",
- "libc",
- "log",
- "serde",
- "serde_json",
- "serde_millis",
- "signal-hook",
- "smithay-client-toolkit",
- "thiserror",
- "tokio",
- "zbus",
-]
 
 [[package]]
 name = "option-operations"

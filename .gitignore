@@ -1,7 +1,8 @@
 target
 .vscode
 # reading materials
-*.md
+**/*.md
+!README.md
 *.pdf
 openstudio-frames
 *.mp4
