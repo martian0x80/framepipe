@@ -7,8 +7,8 @@ use crate::drm_kms::types::{
 use crate::postfx::types::{BlendMode, MouseEffect};
 
 #[derive(Parser, Debug)]
-#[command(name = "openstudio")]
-#[command(about = "GPU screen capture prototype", long_about = None)]
+#[command(name = "framepipe")]
+#[command(about = "GPU Screen Recorder", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,

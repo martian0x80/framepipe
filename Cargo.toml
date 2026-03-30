@@ -1,34 +1,18 @@
-[package]
-name = "framepipe"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+  members = ["crates/app", "crates/privd", "crates/common"]
+  resolver = "2"
 
-[dependencies]
+[workspace.dependencies]
 clap = { version = "4.5.20", features = ["derive"] }
 ctrlc = "3.4.5"
 drm = "0.14.1"
 drm-sys = "0.8.0"
 env_logger = "0.11.9"
 eyre = "0.6.12"
-fastrand = "2.3.0"
-gbm = { version = "0.18.0", features = ["drm-support"] }
 gl = "0.14.0"
-glow = "0.16.0"
-gstreamer = "0.25.0"
-gstreamer-allocators = "0.25.0"
-gstreamer-app = "0.25.0"
-gstreamer-video = "0.25.0"
 khronos-egl = { version = "6.0.0", features = ["static"] }
 libc = "0.2.182"
 log = "0.4.29"
-input = "0.9.1"
-image = { version = "0.25.8", default-features = false, features = ["png"] }
 serde = "1.0.228"
-signal-hook = "0.3.17"
-smithay-client-toolkit = "0.20.0"
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["full"] }
-zbus = { version = "5.13.2", default-features = false, features = ["tokio"] }
-serde_millis = "0.1.1"
-serde_json = "1.0.149"
-bitcode = "0.6.5"
