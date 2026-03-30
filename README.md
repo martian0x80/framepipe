@@ -2,7 +2,7 @@
 
 WIP: ACTIVE DEVELOPMENT - EXPECT BREAKAGE
 
-Framepipe is a GPU-accelerated screen recorder for Wayland/DRM.
+Framepipe is a (zero-copy) GPU-accelerated screen recorder for Linux (Wayland only).
 It captures primary plane frames, composites cursor optionally, and encodes
 using GStreamer backends (VAAPI/QSV/CPU), with a postfx pipeline in progress.
 
@@ -34,25 +34,25 @@ cargo build
 Run capture (H.264, default backend):
 
 ```bash
-sudo -E cargo run -- record --output output.mp4
+sudo -E cargo run -p framepipe -- record --output output.mp4
 ```
 
 Preview (no file output):
 
 ```bash
-sudo -E cargo run -- preview
+sudo -E cargo run -p framepipe -- preview
 ```
 
 Set Quality presets:
 
 ```bash
-sudo -E cargo run -- record --output output.mp4 -q ultra
+sudo -E cargo run -p framepipe -- record --output output.mp4 -q ultra
 ```
 
 Enable cursor composition with sprite:
 
 ```bash
-GST_DEBUG="*:3" sudo -E cargo run -- record --fps 120 --output output.mp4 -q high -v h265 -e qsv -r cqp --wayland-sync-frequency 0.1 --cursor-composition --cursor-sprite /home/martian/Downloads/cursor-weird.png --cursor-scale 0.1
+GST_DEBUG="*:3" sudo -E cargo run -p framepipe -- record --fps 120 --output output.mp4 -q high -v h265 -e qsv -r cqp --wayland-sync-frequency 0.1 --cursor-composition --cursor-sprite /home/martian/Downloads/cursor-weird.png --cursor-scale 0.1
 ```
 
 ## Notes
