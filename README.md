@@ -40,7 +40,7 @@ sudo -E cargo run -- record --output output.mp4
 Preview (no file output):
 
 ```bash
-sudo -E cargo run -- record --preview
+sudo -E cargo run -- preview
 ```
 
 Set Quality presets:
@@ -53,12 +53,6 @@ Enable cursor composition with sprite:
 
 ```bash
 GST_DEBUG="*:3" sudo -E cargo run -- record --fps 120 --output output.mp4 -q high -v h265 -e qsv -r cqp --wayland-sync-frequency 0.1 --cursor-composition --cursor-sprite /home/martian/Downloads/cursor-weird.png --cursor-scale 0.1
-```
-
-Enable cursor smoothing:
-
-```bash
-sudo -E cargo run -- record --output output.mp4 --cursor-composition --cursor-smooth
 ```
 
 ## Notes
