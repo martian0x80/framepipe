@@ -15,7 +15,7 @@ use crate::wayland::{
     mouse_tracker::MouseTrackerLibinput,
     types::{MouseTrackRecordingInfo, MouseTracker},
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use smithay_client_toolkit::{
     compositor::{self, CompositorHandler},
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
@@ -193,8 +193,9 @@ pub fn init_wayland(
             state.waiting_for_anchor = false;
             state.resync_probe_mode = false;
             state.resync_deadline = None;
+            state.last_anchor_at = Some(Instant::now());
             state.set_input_region_clickthrough(&qh);
-            warn!("Resync probe timed out; restoring click-through input region");
+            debug!("Resync probe timed out; restoring click-through input region");
         }
 
         let _ = event_queue.dispatch_pending(&mut state);
@@ -292,29 +293,23 @@ impl PointerHandler for WaylandState {
         _pointer: &smithay_client_toolkit::reexports::client::protocol::wl_pointer::WlPointer,
         events: &[smithay_client_toolkit::seat::pointer::PointerEvent],
     ) {
-        use smithay_client_toolkit::seat::pointer::PointerEventKind as Kind;
         for event in events {
-            match event.kind {
-                _ => {
-                    self.cursor_x = event.position.0;
-                    self.cursor_y = event.position.1;
-                    if self.waiting_for_anchor {
-                        // First absolute point from layer-surface pointer focus.
-                        let now = Instant::now();
-                        self.mouse_tracker
-                            .anchor_absolute(self.cursor_x, self.cursor_y, now);
-                        self.waiting_for_anchor = false;
-                        self.resync_probe_mode = false;
-                        self.resync_deadline = None;
-                        self.last_anchor_at = Some(now);
-                        self.set_input_region_clickthrough(qh);
-                        info!(
-                            "Anchored absolute mouse position at ({:.2}, {:.2}) at t={:?}; switched layer input region to click-through",
-                            self.cursor_x, self.cursor_y, now
-                        );
-                    }
-                }
-                _ => {}
+            self.cursor_x = event.position.0;
+            self.cursor_y = event.position.1;
+            if self.waiting_for_anchor {
+                // First absolute point from layer-surface pointer focus.
+                let now = Instant::now();
+                self.mouse_tracker
+                    .anchor_absolute(self.cursor_x, self.cursor_y, now);
+                self.waiting_for_anchor = false;
+                self.resync_probe_mode = false;
+                self.resync_deadline = None;
+                self.last_anchor_at = Some(now);
+                self.set_input_region_clickthrough(qh);
+                info!(
+                    "Anchored absolute mouse position at ({:.2}, {:.2}) at t={:?}; switched layer input region to click-through",
+                    self.cursor_x, self.cursor_y, now
+                );
             }
         }
     }

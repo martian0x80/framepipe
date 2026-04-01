@@ -41,15 +41,43 @@ impl LibinputInterface for LibinputIface {
                 Ok(unsafe { OwnedFd::from_raw_fd(fd) })
             }
             LibinputIface::Preopened { fds_by_path } => {
-                let Some(source) = fds_by_path.get(path) else {
+                let source = if let Some(fd) = fds_by_path.get(path) {
+                    fd
+                } else {
+                    log::warn!("libinput preopened fd missing for {}", path.display());
                     return Err(libc::ENOENT);
                 };
                 let dup_fd = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
                 if dup_fd < 0 {
+                    log::warn!(
+                        "libinput fd dup failed for {}: {}",
+                        path.display(),
+                        std::io::Error::last_os_error()
+                    );
                     return Err(std::io::Error::last_os_error()
                         .raw_os_error()
                         .unwrap_or(libc::EIO));
                 }
+                // Mirror requested status flags (e.g. O_NONBLOCK) on duplicated fd.
+                let status = flags & (libc::O_NONBLOCK | libc::O_APPEND | libc::O_ASYNC);
+                if unsafe { libc::fcntl(dup_fd, libc::F_SETFL, status) } < 0 {
+                    let e = std::io::Error::last_os_error();
+                    log::warn!(
+                        "libinput fd flag apply failed for {} flags=0x{:x}: {}",
+                        path.display(),
+                        status,
+                        e
+                    );
+                    unsafe {
+                        libc::close(dup_fd);
+                    }
+                    return Err(e.raw_os_error().unwrap_or(libc::EIO));
+                }
+                log::trace!(
+                    "libinput preopened open_restricted ok: {} flags=0x{:x}",
+                    path.display(),
+                    flags
+                );
                 Ok(unsafe { OwnedFd::from_raw_fd(dup_fd) })
             }
         }
@@ -66,6 +94,7 @@ pub struct MouseTrackerLibinput {
     state: Arc<Mutex<MouseState>>,
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -87,6 +116,9 @@ impl MouseTrackerLibinput {
     ) -> Result<Self, String> {
         let iface = if let Some(map) = input_fds {
             log::info!("mouse tracker using {} preopened input fds from privd", map.len());
+            for p in map.keys() {
+                log::trace!("preopened input fd path: {}", p.display());
+            }
             LibinputIface::Preopened { fds_by_path: map }
         } else {
             LibinputIface::Direct
@@ -98,6 +130,8 @@ impl MouseTrackerLibinput {
         let state_clone = Arc::clone(&state);
         let stop_clone = Arc::clone(&stop);
         let paused_clone = Arc::clone(&paused);
+        let finished = Arc::new(AtomicBool::new(false));
+        let finished_clone = Arc::clone(&finished);
         let file_path = PathBuf::from(file_path.as_ref());
 
         let thread = thread::Builder::new()
@@ -126,6 +160,7 @@ impl MouseTrackerLibinput {
                     warn!("libinput: failed to assign seat0: {:?}", e);
                     return;
                 }
+                info!("libinput seat0 assigned");
 
                 let batch_window = Duration::from_millis(5);
                 let mut batch_start = Instant::now();
@@ -215,7 +250,7 @@ impl MouseTrackerLibinput {
                                 st.x += batch_dx;
                                 st.y += batch_dy;
                                 Self::clamp_to_bounds(&mut st);
-                                log::debug!(
+                                log::trace!(
                                     "mouse tracker calc pos -> ({:.2}, {:.2}) [batch_delta=({:.3}, {:.3}) window_ms={}]",
                                     st.x,
                                     st.y,
@@ -269,6 +304,7 @@ impl MouseTrackerLibinput {
                 } else {
                     info!("mouse tracker bitcode written to {}", file_path.display());
                 }
+                finished_clone.store(true, Ordering::Release);
                 debug!("mouse tracker thread exiting");
             })
             .map_err(|e| format!("failed to spawn libinput thread: {e}"))?;
@@ -277,6 +313,7 @@ impl MouseTrackerLibinput {
             state,
             stop,
             paused,
+            finished,
             thread: Some(thread),
         })
     }
@@ -374,9 +411,18 @@ impl Drop for MouseTrackerLibinput {
         info!("mouse tracker stop requested");
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.thread.take() {
-            match h.join() {
-                Ok(()) => debug!("mouse tracker thread joined"),
-                Err(_) => warn!("mouse tracker thread join failed"),
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while !self.finished.load(Ordering::Acquire) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+
+            if self.finished.load(Ordering::Acquire) {
+                match h.join() {
+                    Ok(()) => debug!("mouse tracker thread joined"),
+                    Err(_) => warn!("mouse tracker thread join failed"),
+                }
+            } else {
+                warn!("mouse tracker thread did not finish in time; detaching for fast shutdown");
             }
         }
     }

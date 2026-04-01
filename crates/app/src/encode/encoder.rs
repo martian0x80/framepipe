@@ -899,8 +899,10 @@ impl GstEncoder {
     pub fn push_frame(&mut self, ex: &ExportedDmabuf) -> Result<(), EncodeError> {
         let elapsed_ns = self.start.elapsed().as_nanos() as u64;
         let pts_ns = match self.options.frame_rate_mode {
-            // Strict CFR: keep a monotonic fixed-step timeline.
-            FrameRateMode::Cfr => self.next_pts_ns,
+            FrameRateMode::Cfr => {
+                let wall_time = (elapsed_ns / self.frame_ns).saturating_mul(self.frame_ns);
+                self.next_pts_ns.max(wall_time)
+            }
             FrameRateMode::Vfr => elapsed_ns,
         };
         let duration_ns = match self.options.frame_rate_mode {

@@ -55,6 +55,12 @@ struct SessionState {
 }
 
 fn main() {
+    // Keep privd alive on Ctrl+C from terminal
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+        libc::signal(libc::SIGTERM, libc::SIG_IGN);
+    }
+
     env_logger::builder()
         .format_timestamp_nanos()
         .filter_level(log::LevelFilter::Debug)
@@ -168,8 +174,21 @@ fn start_session(card_path: &str, include_input_fds: bool) -> Result<SessionStat
     let mut input_infos = Vec::new();
     if include_input_fds {
         for path in enumerate_input_event_nodes()? {
-            match OpenOptions::new().read(true).open(&path) {
+            let opened = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .or_else(|rw_err| {
+                    log::debug!(
+                        "rw open failed for {} ({}), retrying read-only",
+                        path.to_string_lossy(),
+                        rw_err
+                    );
+                    OpenOptions::new().read(true).open(&path)
+                });
+            match opened {
                 Ok(file) => {
+                    log::debug!("opened input node: {}", path.to_string_lossy());
                     held_input_fds.push(file.into());
                     input_infos.push(InputDeviceInfo {
                         path: path.to_string_lossy().into_owned(),

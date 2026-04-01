@@ -615,6 +615,7 @@ dependencies = [
  "drm",
  "env_logger",
  "eyre",
+ "libc",
  "log",
  "nix 0.29.0",
  "thiserror",

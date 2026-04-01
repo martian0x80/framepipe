@@ -11,3 +11,4 @@ log = { workspace = true }
 nix = { workspace = true }
 thiserror = { workspace = true }
 eyre = { workspace = true }
+libc = { workspace = true }

@@ -464,8 +464,21 @@ pub fn run_capture_session(
             continue;
         }
 
-        let (frame_texture, frame_w, frame_h, fb_id) =
-            import_current_capture_texture(&mut probe_session, &mut privd_session, &egl, display)?;
+        let (frame_texture, frame_w, frame_h, fb_id) = match import_current_capture_texture(
+            &mut probe_session,
+            &mut privd_session,
+            &egl,
+            display,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                if control.stop_requested.load(Ordering::Relaxed) {
+                    log::info!("Capture stopping; ignoring late frame import error: {}", e);
+                    break;
+                }
+                return Err(e);
+            }
+        };
         if frame_w != source_w || frame_h != source_h {
             let _ = delete_gl_texture(&egl, frame_texture);
             return Err(EglError::Pipeline(format!(

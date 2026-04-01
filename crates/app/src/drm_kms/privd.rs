@@ -24,6 +24,7 @@ pub struct PrivdSession {
     pub input_fds: HashMap<PathBuf, OwnedFd>,
     stream: UnixStream,
     child: Child,
+    fb_cache: HashMap<u32, CachedFrame>,
 }
 
 impl Drop for PrivdSession {
@@ -39,8 +40,29 @@ pub struct ExportedFrame {
     pub fds: Vec<OwnedFd>,
 }
 
+struct CachedFrame {
+    info: ExportedFrameInfo,
+    fds: Vec<OwnedFd>,
+}
+
 impl PrivdSession {
     pub fn export_framebuffer(&mut self, fb_id: u32) -> Result<ExportedFrame, PrivdError> {
+        if let Some(cached) = self.fb_cache.get(&fb_id) {
+            let mut duped = Vec::with_capacity(cached.fds.len());
+            for fd in &cached.fds {
+                duped.push(dup_fd(fd)?);
+            }
+            log::trace!(
+                "privd export cache hit: fb={} planes={}",
+                fb_id,
+                duped.len()
+            );
+            return Ok(ExportedFrame {
+                info: cached.info.clone(),
+                fds: duped,
+            });
+        }
+
         log::trace!("requesting framebuffer export from privd: fb={}", fb_id);
         let req = IpcRequest::ExportFramebuffer { fb_id };
         send_packet(&self.stream, &req, &[]).map_err(PrivdError::Io)?;
@@ -48,12 +70,40 @@ impl PrivdSession {
             recv_packet(&self.stream).map_err(PrivdError::Io)?;
         match resp {
             IpcResponse::FrameExported { frame } => {
+                let mut keep = Vec::with_capacity(fds.len());
+                let mut out = Vec::with_capacity(fds.len());
+                for fd in &fds {
+                    keep.push(dup_fd(fd)?);
+                }
+                for fd in fds {
+                    out.push(fd);
+                }
+                self.fb_cache.insert(
+                    fb_id,
+                    CachedFrame {
+                        info: frame.clone(),
+                        fds: keep,
+                    },
+                );
+                if self.fb_cache.len() > 8 {
+                    if let Some(victim) = self
+                        .fb_cache
+                        .keys()
+                        .copied()
+                        .find(|id| *id != fb_id)
+                    {
+                        self.fb_cache.remove(&victim);
+                    }
+                }
                 log::trace!(
                     "received exported framebuffer from privd: fb={} planes={}",
                     frame.fb_id,
-                    fds.len()
+                    out.len()
                 );
-                Ok(ExportedFrame { info: frame, fds })
+                Ok(ExportedFrame {
+                    info: frame,
+                    fds: out,
+                })
             }
             IpcResponse::Error { message } => Err(PrivdError::Protocol(message)),
             other => Err(PrivdError::Protocol(format!(
@@ -157,7 +207,16 @@ pub fn acquire_device_fds(card_path: &str, include_input_fds: bool) -> Result<Pr
         input_fds,
         stream: client,
         child,
+        fb_cache: HashMap::new(),
     })
+}
+
+fn dup_fd(fd: &OwnedFd) -> Result<OwnedFd, PrivdError> {
+    let dup = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+    if dup < 0 {
+        return Err(PrivdError::Io(io::Error::last_os_error()));
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(dup) })
 }
 
 fn resolve_privd_path() -> io::Result<PathBuf> {
