@@ -2,6 +2,7 @@ use glow::{HasContext, NativeTexture};
 use std::{
     fs,
     num::NonZero,
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     path::Path,
     sync::{Arc, atomic::Ordering},
     thread,
@@ -12,6 +13,7 @@ use crate::app::signals::CaptureControl;
 use crate::drm_kms::{
     debug, egl_dmabuf_export, gpu_pipeline,
     gpu_pipeline::create_default_cursor_texture,
+    privd,
     probe::ProbeSession,
     types::{CaptureOptions, CaptureOutput},
 };
@@ -179,7 +181,17 @@ pub fn run_capture_session(
     options: CaptureOptions,
     control: CaptureControl,
 ) -> Result<(), EglError> {
+    log::info!("capture session start: card={} connector={:?} fps={}", options.card_path, options.connector, options.fps);
     let use_mouse_tracking = options.mouse_tracking || options.cursor_composition;
+    let mut privd_session = privd::acquire_device_fds(&options.card_path, use_mouse_tracking)
+        .map_err(|e| EglError::Pipeline(format!("failed to acquire device fds from privd: {e}")))?;
+    let input_fds_for_tracker = if use_mouse_tracking {
+        Some(std::mem::take(&mut privd_session.input_fds))
+    } else {
+        None
+    };
+    let drm_fd = dup_fd(privd_session.drm_fd.as_raw_fd())
+        .map_err(|e| EglError::Pipeline(format!("failed to dup drm fd from privd: {e}")))?;
 
     let mouse_ring: Option<Arc<RingBuffer>> = if use_mouse_tracking {
         Some(Arc::new(RingBuffer::new(4096)))
@@ -216,6 +228,7 @@ pub fn run_capture_session(
         let tracking_control =
             TrackingControl::new(control.stop_requested.clone(), control.paused.clone());
         let ring_clone = mouse_ring.clone();
+        let preopened_input_fds = input_fds_for_tracker;
         let handle = thread::spawn(move || {
             if let Err(e) = init_wayland(
                 sync_frequency_hz,
@@ -223,6 +236,7 @@ pub fn run_capture_session(
                 tracking_control,
                 recording_info,
                 ring_clone,
+                preopened_input_fds,
             ) {
                 log::error!("Failed to initialize Wayland mouse tracking: {e}");
             }
@@ -235,20 +249,33 @@ pub fn run_capture_session(
         None
     };
 
+    log::debug!("initializing EGL context");
     let EglCtx {
         egl,
         display,
         context,
         ..
-    } = init_egl(&options.card_path)?;
-    let mut probe_session = ProbeSession::new_with_connector(
-        &options.card_path,
+    } = init_egl(&options.card_path).map_err(|e| {
+        log::error!("init_egl failed: {}", e);
+        e
+    })?;
+    log::debug!("EGL context initialized");
+    log::debug!("creating probe session from privd drm fd");
+    let mut probe_session = ProbeSession::new_with_card(
+        crate::drm_kms::types::Card::from_owned_fd(drm_fd),
         options.connector.clone(),
         options.allow_fallback_connector,
     )
-    .map_err(EglError::Probe)?;
+    .map_err(|e| {
+        log::error!("probe session creation failed: {}", e);
+        EglError::Probe(e)
+    })?;
+    log::debug!("probe session ready, importing first texture");
     let (texture, source_w, source_h, mut prev_fb_id) =
-        import_current_capture_texture(&mut probe_session, &egl, display)?;
+        import_current_capture_texture(&mut probe_session, &mut privd_session, &egl, display).map_err(|e| {
+            log::error!("initial frame import failed: {}", e);
+            e
+        })?;
     let output_w = options
         .output_width
         .map(|v| v.max(1) as i32)
@@ -316,7 +343,7 @@ pub fn run_capture_session(
                 );
                 (tex, w, h, Some((0.0, 0.0)))
             } else {
-                let tex = unsafe { create_default_cursor_texture(&pipelines[0].gl) }
+                let tex = create_default_cursor_texture(&pipelines[0].gl)
                     .map_err(EglError::Pipeline)?;
                 log::info!("Cursor composition enabled, created default cursor texture");
                 (tex, 24.0_f32, 24.0_f32, None)
@@ -438,7 +465,7 @@ pub fn run_capture_session(
         }
 
         let (frame_texture, frame_w, frame_h, fb_id) =
-            import_current_capture_texture(&mut probe_session, &egl, display)?;
+            import_current_capture_texture(&mut probe_session, &mut privd_session, &egl, display)?;
         if frame_w != source_w || frame_h != source_h {
             let _ = delete_gl_texture(&egl, frame_texture);
             return Err(EglError::Pipeline(format!(
@@ -625,4 +652,12 @@ pub fn run_capture_session(
     }
 
     Ok(())
+}
+
+fn dup_fd(raw_fd: i32) -> std::io::Result<OwnedFd> {
+    let dup_fd = unsafe { libc::fcntl(raw_fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if dup_fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(dup_fd) })
 }

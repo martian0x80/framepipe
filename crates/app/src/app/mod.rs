@@ -4,17 +4,11 @@ pub mod config;
 pub mod pipeline;
 pub mod signals;
 
-use std::path::PathBuf;
-
 use eyre::Result;
 
 use crate::{
     drm_kms::{probe, types::CaptureOutput},
-    postfx::renderer,
-    wayland::{
-        layer::{TrackingControl, init_wayland},
-        types::MouseTrackRecordingInfo,
-    },
+    postfx::renderer
 };
 
 use self::{
@@ -42,16 +36,6 @@ pub fn run(cli: Cli) -> Result<()> {
             let options = config::build_capture_options(capture, CaptureOutput::Preview)?;
             let control = CaptureControl::register().map_err(|e| eyre::eyre!(e))?;
             RecordingSession::new(options)?.run(control)
-        }
-        Commands::Test { sync_frequency_hz } => {
-            init_wayland(
-                sync_frequency_hz,
-                &PathBuf::from("/tmp/openstudio-cursor.bitcode"),
-                TrackingControl::idle(),
-                MouseTrackRecordingInfo::default(),
-                None,
-            )?;
-            Ok(())
         }
         Commands::Postfx {
             input,

@@ -6,6 +6,7 @@ use gbm::AsRaw;
 use std::os::fd::{AsFd, AsRawFd};
 
 use crate::drm_kms::{
+    privd::PrivdSession,
     drm::{DrmInitError, init_drm_device},
     probe::ProbeSession,
     types::{Card, ProbeResult},
@@ -451,30 +452,42 @@ pub(crate) fn delete_gl_texture(
 
 pub(crate) fn import_current_capture_texture(
     probe_session: &mut ProbeSession,
+    privd_session: &mut PrivdSession,
     egl: &khronos_egl::Instance<khronos_egl::Static>,
     display: khronos_egl::Display,
 ) -> Result<(u32, i32, i32, u32), EglError> {
     let ProbeResult {
         fb_id,
-        fb_info,
-        plane_fds,
+        fb_info: _,
+        plane_fds: _,
     } = probe_session.capture_frame().map_err(EglError::Probe)?;
-    let (w, h) = (fb_info.size().0 as i32, fb_info.size().1 as i32);
-    let fourcc = fb_info.pixel_format() as u32;
-    let modifier: Option<u64> = fb_info.modifier().map(|m| m.into());
+    let exported = privd_session
+        .export_framebuffer(fb_id)
+        .map_err(|e| EglError::Pipeline(format!("privd framebuffer export failed: {e}")))?;
+    let frame = exported.info;
+    let plane_fds = exported.fds;
+    let (w, h) = (frame.width, frame.height);
+    let fourcc = frame.fourcc;
+    let modifier = frame.modifier;
     let mut planes = Vec::new();
     for i in 0..plane_fds.len().min(4) {
-        let fd = match &plane_fds[i] {
-            Some(fd) => fd.as_raw_fd(),
-            None => continue,
-        };
-        let offset = fb_info.offsets()[i];
-        let pitch = fb_info.pitches()[i];
+        let fd = plane_fds[i].as_raw_fd();
+        let offset = *frame.offsets.get(i).unwrap_or(&0_i32) as u32;
+        let pitch = *frame.strides.get(i).unwrap_or(&0_i32) as u32;
         planes.push((i, fd, offset, pitch));
     }
+    log::trace!(
+        "import fb={} size={}x{} fourcc=0x{:08x} modifier={:?} planes={:?}",
+        fb_id,
+        w,
+        h,
+        fourcc,
+        modifier,
+        planes
+    );
 
     let attrs_mod = build_attrs(w, h, fourcc, &planes, modifier, true);
-    let image = unsafe {
+    let image_try_mod = unsafe {
         egl.create_image(
             display,
             khronos_egl::Context::from_ptr(khronos_egl::NO_CONTEXT),
@@ -482,10 +495,19 @@ pub(crate) fn import_current_capture_texture(
             khronos_egl::ClientBuffer::from_ptr(std::ptr::null_mut()),
             &attrs_mod,
         )
-    }
-    .or_else(|_| {
+    };
+    let image = match image_try_mod {
+        Ok(img) => img,
+        Err(mod_err) => {
+            log::warn!(
+                "eglCreateImage dmabuf import with modifier failed for fb={} fourcc=0x{:08x} modifier={:?}: {}",
+                fb_id,
+                fourcc,
+                modifier,
+                mod_err
+            );
         let attrs_nomod = build_attrs(w, h, fourcc, &planes, None, false);
-        unsafe {
+            match unsafe {
             egl.create_image(
                 display,
                 khronos_egl::Context::from_ptr(khronos_egl::NO_CONTEXT),
@@ -493,9 +515,21 @@ pub(crate) fn import_current_capture_texture(
                 khronos_egl::ClientBuffer::from_ptr(std::ptr::null_mut()),
                 &attrs_nomod,
             )
+            } {
+                Ok(img) => img,
+                Err(nomod_err) => {
+                    log::error!(
+                        "eglCreateImage dmabuf import without modifier failed for fb={} fourcc=0x{:08x}: {} (mod-attempt error was: {})",
+                        fb_id,
+                        fourcc,
+                        nomod_err,
+                        mod_err
+                    );
+                    return Err(EglError::CreateImage(nomod_err));
+                }
+            }
         }
-    })
-    .map_err(EglError::CreateImage)?;
+    };
 
     let texture = egl_image_to_texture(egl, image)?;
     unsafe {

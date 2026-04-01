@@ -41,6 +41,8 @@ pub enum ProbeError {
     GetFramebufferInfo,
     #[error("Failed to convert buffer handle to PRIME fd")]
     BufferToPrimeFd,
+    #[error("Framebuffer has no exportable GEM handles (likely missing CAP_SYS_ADMIN/DRM master); privilege-sensitive fb export must stay in privd")]
+    MissingFramebufferHandles,
     #[error("Unknown probe error")]
     Unknown,
 }
@@ -249,7 +251,15 @@ impl ProbeSession {
         requested_connector: Option<String>,
         allow_fallback_connector: bool,
     ) -> Result<Self, ProbeError> {
-        let card = init_drm_device(card_path).map_err(|e| ProbeError::OpenDevice(e))?;
+        let card = init_drm_device(card_path).map_err(ProbeError::OpenDevice)?;
+        Self::new_with_card(card, requested_connector, allow_fallback_connector)
+    }
+
+    pub fn new_with_card(
+        card: Card,
+        requested_connector: Option<String>,
+        allow_fallback_connector: bool,
+    ) -> Result<Self, ProbeError> {
         card.set_client_capability(Atomic, true)
             .map_err(|_| ProbeError::SetClientCapability)?;
         card.set_client_capability(UniversalPlanes, true)
@@ -316,25 +326,9 @@ impl ProbeSession {
         let fb_info = card
             .get_planar_framebuffer(fb)
             .map_err(|_| ProbeError::GetFramebufferInfo)?;
-        let mut plane_fds: Vec<Option<OwnedFd>> = Vec::with_capacity(fb_info.buffers().len());
-        for (i, buf) in fb_info.buffers().iter().enumerate() {
-            match buf {
-                Some(handle) => {
-                    let fd = card
-                        .buffer_to_prime_fd(*handle, CLOEXEC)
-                        .map_err(|_| ProbeError::BufferToPrimeFd)?;
-                    plane_fds.push(Some(fd));
-                    log::trace!(
-                        "fb {:?} plane {} -> handle={:?} offset={} pitch={}",
-                        fb,
-                        i,
-                        handle,
-                        fb_info.offsets()[i],
-                        fb_info.pitches()[i]
-                    );
-                }
-                None => plane_fds.push(None),
-            }
+        let mut plane_fds = Vec::with_capacity(fb_info.buffers().len());
+        for _ in fb_info.buffers() {
+            plane_fds.push(None);
         }
 
         let fb_id: u32 = fb.into();

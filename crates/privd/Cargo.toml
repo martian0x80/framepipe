@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+common = { path = "../common" }
+drm = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+nix = { workspace = true }
+thiserror = { workspace = true }
+eyre = { workspace = true }

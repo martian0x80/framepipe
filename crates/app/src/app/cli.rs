@@ -41,10 +41,6 @@ pub enum Commands {
         #[command(flatten)]
         capture: CaptureArgs,
     },
-    Test {
-        #[arg(long, default_value_t = 0.1)]
-        sync_frequency_hz: f64,
-    },
 }
 
 #[derive(Args, Debug, Clone)]

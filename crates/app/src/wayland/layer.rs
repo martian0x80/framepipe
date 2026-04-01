@@ -1,5 +1,8 @@
 use std::{
+    collections::HashMap,
     os::fd::AsRawFd,
+    os::fd::OwnedFd,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -101,6 +104,7 @@ pub fn init_wayland(
     control: TrackingControl,
     recording: MouseTrackRecordingInfo,
     ring: Option<Arc<RingBuffer>>,
+    input_fds: Option<HashMap<PathBuf, OwnedFd>>,
 ) -> Result<(), WaylandError> {
     info!("Initializing Wayland connection and event loop");
     info!(
@@ -108,7 +112,7 @@ pub fn init_wayland(
         file_path.to_string_lossy()
     );
     // Start libinput tracker first so we can replay deltas after first absolute anchor.
-    let mouse_tracker = MouseTrackerLibinput::start(file_path, recording, ring)
+    let mouse_tracker = MouseTrackerLibinput::start_with_input_fds(file_path, recording, ring, input_fds)
         .map_err(|_| WaylandError::ConnectionFailed)?;
 
     let conn = Connection::connect_to_env().map_err(|_| WaylandError::ConnectionFailed)?;

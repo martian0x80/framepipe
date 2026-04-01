@@ -5,5 +5,6 @@ pub mod egl_dmabuf_export;
 pub mod gpu_pipeline;
 pub mod gstreamer;
 pub mod probe;
+pub mod privd;
 pub(crate) mod recording_loop;
 pub mod types;

@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -18,19 +19,40 @@ use crate::wayland::types::{
     MouseTrackRecordingInfo, MouseTracker,
 };
 
-struct LibinputIface;
+enum LibinputIface {
+    Direct,
+    Preopened {
+        fds_by_path: HashMap<PathBuf, OwnedFd>,
+    },
+}
 
 impl LibinputInterface for LibinputIface {
     fn open_restricted(&mut self, path: &Path, flags: i32) -> Result<OwnedFd, i32> {
-        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-            .map_err(|_| libc::EINVAL)?;
-        let fd = unsafe { libc::open(c_path.as_ptr(), flags) };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error()
-                .raw_os_error()
-                .unwrap_or(libc::EIO));
+        match self {
+            LibinputIface::Direct => {
+                let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+                    .map_err(|_| libc::EINVAL)?;
+                let fd = unsafe { libc::open(c_path.as_ptr(), flags) };
+                if fd < 0 {
+                    return Err(std::io::Error::last_os_error()
+                        .raw_os_error()
+                        .unwrap_or(libc::EIO));
+                }
+                Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+            }
+            LibinputIface::Preopened { fds_by_path } => {
+                let Some(source) = fds_by_path.get(path) else {
+                    return Err(libc::ENOENT);
+                };
+                let dup_fd = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+                if dup_fd < 0 {
+                    return Err(std::io::Error::last_os_error()
+                        .raw_os_error()
+                        .unwrap_or(libc::EIO));
+                }
+                Ok(unsafe { OwnedFd::from_raw_fd(dup_fd) })
+            }
         }
-        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
     fn close_restricted(&mut self, fd: OwnedFd) {
@@ -48,65 +70,28 @@ pub struct MouseTrackerLibinput {
 }
 
 impl MouseTrackerLibinput {
-    pub fn clamp_to_bounds(st: &mut MouseState) {
-        if let Some(max_x) = st.max_x {
-            st.x = st.x.clamp(0.0, max_x.max(0.0));
-        }
-        if let Some(max_y) = st.max_y {
-            st.y = st.y.clamp(0.0, max_y.max(0.0));
-        }
-    }
-
-    pub fn anchor_absolute(&self, x: f64, y: f64, at: Instant) {
-        let mut st = self.state.lock().expect("mouse tracker mutex poisoned");
-        st.x = x;
-        st.y = y;
-        st.anchored = true;
-        st.history.clear();
-        st.anchor_epoch = st.anchor_epoch.wrapping_add(1);
-        Self::clamp_to_bounds(&mut st);
-        debug!(
-            "mouse tracker anchored at ({:.2}, {:.2}) at {:?}; delta history reset (epoch={})",
-            st.x, st.y, at, st.anchor_epoch
-        );
-    }
-
-    fn write_framed<W: Write>(writer: &mut W, payload: &[u8]) -> Result<(), String> {
-        let len = payload.len() as u32;
-        writer
-            .write_all(&len.to_le_bytes())
-            .map_err(|e| format!("failed to write mouse track frame length: {e}"))?;
-        writer
-            .write_all(payload)
-            .map_err(|e| format!("failed to write mouse track frame payload: {e}"))?;
-        Ok(())
-    }
-
-    fn flush_chunk<W: Write>(
-        writer: &mut W,
-        pending: &mut Vec<MouseSampleRecord>,
-    ) -> Result<(), String> {
-        if pending.is_empty() {
-            return Ok(());
-        }
-        let chunk = MouseTrackChunk {
-            samples: std::mem::take(pending),
-        };
-        let bytes = bitcode::encode(&chunk);
-        Self::write_framed(writer, &bytes)?;
-        writer
-            .flush()
-            .map_err(|e| format!("failed to flush mouse track chunk: {e}"))?;
-        Ok(())
-    }
-}
-
-impl MouseTracker for MouseTrackerLibinput {
-    fn start<T: AsRef<std::path::Path>>(
+    pub fn start_with_input_fds<T: AsRef<std::path::Path>>(
         file_path: T,
         recording: MouseTrackRecordingInfo,
         ring: Option<Arc<RingBuffer>>,
+        input_fds: Option<HashMap<PathBuf, OwnedFd>>,
     ) -> Result<Self, String> {
+        Self::start_inner(file_path, recording, ring, input_fds)
+    }
+
+    fn start_inner<T: AsRef<std::path::Path>>(
+        file_path: T,
+        recording: MouseTrackRecordingInfo,
+        ring: Option<Arc<RingBuffer>>,
+        input_fds: Option<HashMap<PathBuf, OwnedFd>>,
+    ) -> Result<Self, String> {
+        let iface = if let Some(map) = input_fds {
+            log::info!("mouse tracker using {} preopened input fds from privd", map.len());
+            LibinputIface::Preopened { fds_by_path: map }
+        } else {
+            LibinputIface::Direct
+        };
+
         let state = Arc::new(Mutex::new(MouseState::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
@@ -136,7 +121,7 @@ impl MouseTracker for MouseTrackerLibinput {
                     return;
                 }
 
-                let mut li = Libinput::new_with_udev(LibinputIface);
+                let mut li = Libinput::new_with_udev(iface);
                 if let Err(e) = li.udev_assign_seat("seat0") {
                     warn!("libinput: failed to assign seat0: {:?}", e);
                     return;
@@ -229,9 +214,8 @@ impl MouseTracker for MouseTrackerLibinput {
                             if st.anchored {
                                 st.x += batch_dx;
                                 st.y += batch_dy;
-                                // Clamp once after applying the whole batch.
                                 Self::clamp_to_bounds(&mut st);
-                                log::trace!(
+                                log::debug!(
                                     "mouse tracker calc pos -> ({:.2}, {:.2}) [batch_delta=({:.3}, {:.3}) window_ms={}]",
                                     st.x,
                                     st.y,
@@ -295,6 +279,68 @@ impl MouseTracker for MouseTrackerLibinput {
             paused,
             thread: Some(thread),
         })
+    }
+
+    pub fn clamp_to_bounds(st: &mut MouseState) {
+        if let Some(max_x) = st.max_x {
+            st.x = st.x.clamp(0.0, max_x.max(0.0));
+        }
+        if let Some(max_y) = st.max_y {
+            st.y = st.y.clamp(0.0, max_y.max(0.0));
+        }
+    }
+
+    pub fn anchor_absolute(&self, x: f64, y: f64, at: Instant) {
+        let mut st = self.state.lock().expect("mouse tracker mutex poisoned");
+        st.x = x;
+        st.y = y;
+        st.anchored = true;
+        st.history.clear();
+        st.anchor_epoch = st.anchor_epoch.wrapping_add(1);
+        Self::clamp_to_bounds(&mut st);
+        debug!(
+            "mouse tracker anchored at ({:.2}, {:.2}) at {:?}; delta history reset (epoch={})",
+            st.x, st.y, at, st.anchor_epoch
+        );
+    }
+
+    fn write_framed<W: Write>(writer: &mut W, payload: &[u8]) -> Result<(), String> {
+        let len = payload.len() as u32;
+        writer
+            .write_all(&len.to_le_bytes())
+            .map_err(|e| format!("failed to write mouse track frame length: {e}"))?;
+        writer
+            .write_all(payload)
+            .map_err(|e| format!("failed to write mouse track frame payload: {e}"))?;
+        Ok(())
+    }
+
+    fn flush_chunk<W: Write>(
+        writer: &mut W,
+        pending: &mut Vec<MouseSampleRecord>,
+    ) -> Result<(), String> {
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let chunk = MouseTrackChunk {
+            samples: std::mem::take(pending),
+        };
+        let bytes = bitcode::encode(&chunk);
+        Self::write_framed(writer, &bytes)?;
+        writer
+            .flush()
+            .map_err(|e| format!("failed to flush mouse track chunk: {e}"))?;
+        Ok(())
+    }
+}
+
+impl MouseTracker for MouseTrackerLibinput {
+    fn start<T: AsRef<std::path::Path>>(
+        file_path: T,
+        recording: MouseTrackRecordingInfo,
+        ring: Option<Arc<RingBuffer>>,
+    ) -> Result<Self, String> {
+        Self::start_inner(file_path, recording, ring, None)
     }
 
     fn set_paused(&self, paused: bool) {

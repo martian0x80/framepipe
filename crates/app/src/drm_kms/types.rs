@@ -1,7 +1,7 @@
 use drm::Device as BasicDevice;
 use drm::control::Device as ControlDevice;
 use std::fs::{File, OpenOptions};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::io::{AsFd, BorrowedFd};
 use std::path::PathBuf;
 
@@ -21,6 +21,18 @@ impl Card {
     pub fn open(path: &str) -> std::io::Result<Self> {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         Ok(Card(file))
+    }
+
+    pub fn from_owned_fd(fd: OwnedFd) -> Self {
+        Card(File::from(fd))
+    }
+
+    pub fn try_clone(&self) -> std::io::Result<Self> {
+        self.0.try_clone().map(Card)
+    }
+
+    pub fn as_raw_fd(&self) -> RawFd {
+        self.0.as_raw_fd()
     }
 }
 
