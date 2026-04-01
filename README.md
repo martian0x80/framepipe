@@ -28,31 +28,41 @@ This repo is experimental and not stable. Interfaces and CLI flags will change.
 Build:
 
 ```bash
-cargo build
+cargo build --all-targets
 ```
+
+Set caps on the priviledged service binary:
+
+```bash
+sudo setcap cap_sys_admin,cap_dac_override+ep target/debug/framepipe-privd
+```
+
+`cap_sys_admin` is required for DRM/KMS capture, and `cap_dac_override` is needed to read input devices for mouse tracking.
+
+`sudo` is no longer required for the cli, all priviledged operations are handled by the `framepipe-privd` service.
 
 Run capture (H.264, default backend):
 
 ```bash
-sudo -E cargo run -p framepipe -- record --output output.mp4
+cargo run -p framepipe -- record --output output.mp4
 ```
 
 Preview (no file output):
 
 ```bash
-sudo -E cargo run -p framepipe -- preview
+cargo run -p framepipe -- preview
 ```
 
 Set Quality presets:
 
 ```bash
-sudo -E cargo run -p framepipe -- record --output output.mp4 -q ultra
+cargo run -p framepipe -- record --output output.mp4 -q ultra
 ```
 
 Enable cursor composition with sprite:
 
 ```bash
-GST_DEBUG="*:3" sudo -E cargo run -p framepipe -- record --fps 120 --output output.mp4 -q high -v h265 -e qsv -r cqp --wayland-sync-frequency 0.1 --cursor-composition --cursor-sprite /home/martian/Downloads/cursor-weird.png --cursor-scale 0.1
+GST_DEBUG="*:3" cargo run -p framepipe -- record --fps 120 --output output.mp4 -q high -v h265 -e qsv -r cqp --wayland-sync-frequency 0.1 --cursor-composition --cursor-sprite /home/martian/Downloads/cursor-weird.png --cursor-scale 0.1
 ```
 
 ## Notes
