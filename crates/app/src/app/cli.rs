@@ -113,6 +113,6 @@ pub struct CaptureArgs {
         help = "File path to write mouse tracking data to"
     )]
     pub mouse_tracking_file: String,
-    #[arg(long, help = "Capture profile (hdr10, hdr, widesdr, sdr)")]
+    #[arg(long, help = "Capture profile (hdr10, hdr, sdr)")]
     pub profile: Option<Profile>,
 }

@@ -151,14 +151,14 @@ fn resolve_profile(
         },
 
         // Non-HDR10 profiles stay 8-bit NV12.
-        (VideoCodec::H265, Profile::Hdr) | (VideoCodec::H265, Profile::WideSdr) => {
+        (VideoCodec::H265, Profile::Hdr) => {
             ProfileSelection {
                 encoder_profile: "main",
                 input_format: "NV12",
                 colorimetry: Colorimetry::Bt2020,
             }
         }
-        (VideoCodec::Av1, Profile::Hdr) | (VideoCodec::Av1, Profile::WideSdr) => {
+        (VideoCodec::Av1, Profile::Hdr) => {
             ProfileSelection {
                 encoder_profile: "main",
                 input_format: "NV12",

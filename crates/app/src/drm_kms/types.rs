@@ -198,7 +198,6 @@ impl ToString for VideoCodec {
 pub enum Profile {
     Hdr10, // 10 bit (main-10) + bt2020 + P010_10LE format (+ transfer funct
     Hdr, // default bit depth (main) + bt2020 + NV12 format
-    WideSdr, // default bit depth (main) + bt2020 + NV12 format
     Sdr, // default bit depth (main) + bt709 + NV12 format
 }
 
@@ -207,7 +206,6 @@ impl ToString for Profile {
         match self {
             Profile::Hdr10 => "hdr10".to_string(),
             Profile::Hdr => "hdr".to_string(),
-            Profile::WideSdr => "widesdr".to_string(),
             Profile::Sdr => "sdr".to_string(),
         }
     }
