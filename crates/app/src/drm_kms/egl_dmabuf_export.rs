@@ -129,7 +129,7 @@ pub unsafe fn export_rgba_tex_to_dmabuf(
             fds: owned,
             strides,
             offsets,
-            acquire_fence_fd: None, // fill if you export native fence fd
+            acquire_fence_fd: None,
         })
     }
 }

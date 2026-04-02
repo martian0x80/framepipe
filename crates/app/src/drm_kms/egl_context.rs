@@ -1,13 +1,7 @@
-// EGL context and dma-buf import helpers.
-// wow this was probably most awful part of the codebase to write
-// i am just too dumb for this
-
-use gbm::AsRaw;
-use std::os::fd::{AsFd, AsRawFd};
+use std::os::fd::AsRawFd;
 
 use crate::drm_kms::{
     privd::PrivdSession,
-    drm::{DrmInitError, init_drm_device},
     probe::ProbeSession,
     types::{Card, ProbeResult},
 };
@@ -177,12 +171,10 @@ fn build_attrs(
 }
 
 fn client_exts(egl: &khronos_egl::Instance<khronos_egl::Static>) -> String {
-    unsafe {
-        egl.query_string(None, khronos_egl::EXTENSIONS)
-            .ok()
-            .and_then(|s| s.to_str().ok().map(|x| x.to_owned()))
-            .unwrap_or_else(|| "".to_string())
-    }
+    egl.query_string(None, khronos_egl::EXTENSIONS)
+        .ok()
+        .and_then(|s| s.to_str().ok().map(|x| x.to_owned()))
+        .unwrap_or_else(|| "".to_string())
 }
 
 fn has_ext(exts: &str, name: &str) -> bool {
@@ -193,9 +185,9 @@ fn init_display_common(
     egl_i: &khronos_egl::Instance<khronos_egl::Static>,
     display: khronos_egl::Display,
 ) -> Result<(khronos_egl::Context, khronos_egl::Surface), EglError> {
-    unsafe { egl_i.initialize(display) }.map_err(EglError::EglInit)?;
+    egl_i.initialize(display).map_err(EglError::EglInit)?;
 
-    let dext = unsafe { egl_i.query_string(Some(display), khronos_egl::EXTENSIONS) }
+    let dext = egl_i.query_string(Some(display), khronos_egl::EXTENSIONS)
         .map_err(EglError::QueryExt)?
         .to_str()
         .map_err(|_| EglError::Unknown)?
@@ -225,7 +217,7 @@ fn init_display_common(
         khronos_egl::NONE,
     ];
 
-    let config = unsafe { egl_i.choose_first_config(display, &cfg_attribs) }
+    let config = egl_i.choose_first_config(display, &cfg_attribs)
         .map_err(|_| EglError::ChooseConfig)?
         .ok_or(EglError::ChooseConfig)?;
 
@@ -236,65 +228,18 @@ fn init_display_common(
         1,
         khronos_egl::NONE,
     ];
-    let surface = unsafe { egl_i.create_pbuffer_surface(display, config, &pbuf_attribs) }
+    let surface = egl_i.create_pbuffer_surface(display, config, &pbuf_attribs)
         .map_err(|_| EglError::ChooseConfig)?;
 
-    unsafe { egl_i.bind_api(khronos_egl::OPENGL_ES_API) }.map_err(|e| EglError::EglInit(e))?;
+    egl_i.bind_api(khronos_egl::OPENGL_ES_API).map_err(|e| EglError::EglInit(e))?;
     let ctx_attribs = [khronos_egl::CONTEXT_CLIENT_VERSION, 3, khronos_egl::NONE];
-    let context = unsafe { egl_i.create_context(display, config, None, &ctx_attribs) }
+    let context = egl_i.create_context(display, config, None, &ctx_attribs)
         .map_err(|e| EglError::CreateContext(e))?;
 
-    unsafe { egl_i.make_current(display, Some(surface), Some(surface), Some(context)) }
+    egl_i.make_current(display, Some(surface), Some(surface), Some(context))
         .map_err(|e| EglError::MakeCurrent(e))?;
 
     Ok((context, surface))
-}
-
-// fuck gbm for now
-fn try_init_gbm(
-    egl_i: &khronos_egl::Instance<khronos_egl::Static>,
-    card_path: &str,
-) -> Result<
-    (
-        khronos_egl::Display,
-        khronos_egl::Context,
-        khronos_egl::Surface,
-        Card,
-    ),
-    EglError,
-> {
-    log::debug!(
-        "Attempting to initialize GBM device for card at {}",
-        card_path
-    );
-    let drm_file = init_drm_device(card_path).map_err(|e| EglError::GbmCreateDevice(e))?;
-    let drm_fd = drm_file.as_fd();
-    log::debug!(
-        "Opened DRM device at {} with fd {}",
-        card_path,
-        drm_fd.as_raw_fd()
-    );
-
-    let gbm_dev = gbm::Device::new(drm_fd)
-        .map_err(|e| EglError::GbmCreateDevice(DrmInitError::OpenDevice(e)))?;
-
-    let display = unsafe {
-        egl_i.get_platform_display(
-            EGL_PLATFORM_GBM_KHR,
-            gbm_dev.as_raw() as *mut _,
-            &[khronos_egl::ATTRIB_NONE],
-        )
-    }
-    .map_err(EglError::EglInit)?;
-
-    match init_display_common(egl_i, display) {
-        // gbm_dev carries the life of drm_file now, no point returning both
-        Ok((ctx, surf)) => Ok((display, ctx, surf, drm_file)),
-        Err(e) => {
-            drop(gbm_dev);
-            Err(e)
-        }
-    }
 }
 
 fn try_init_surfaceless(
@@ -327,9 +272,9 @@ pub fn init_egl(card_path: &str) -> Result<EglCtx, EglError> {
     log::debug!("EGL client extensions: {}", cext);
 
     // i have no idea if the order or dependecies are correct here
-    let can_gbm = (has_ext(&cext, "EGL_EXT_platform_base")
-        && has_ext(&cext, "EGL_KHR_platform_gbm"))
-        || has_ext(&cext, "EGL_MESA_platform_gbm");
+    // let can_gbm = (has_ext(&cext, "EGL_EXT_platform_base")
+    //     && has_ext(&cext, "EGL_KHR_platform_gbm"))
+    //     || has_ext(&cext, "EGL_MESA_platform_gbm");
 
     let can_surfaceless = (has_ext(&cext, "EGL_EXT_platform_base")
         && has_ext(&cext, "EGL_MESA_platform_surfaceless"))
@@ -532,9 +477,7 @@ pub(crate) fn import_current_capture_texture(
     };
 
     let texture = egl_image_to_texture(egl, image)?;
-    unsafe {
-        egl.destroy_image(display, image)
-            .map_err(EglError::CreateImage)?;
-    }
+    egl.destroy_image(display, image)
+        .map_err(EglError::CreateImage)?;
     Ok((texture, w, h, fb_id))
 }

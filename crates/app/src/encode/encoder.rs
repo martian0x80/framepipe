@@ -11,7 +11,7 @@ use gstreamer_video::DownstreamForceKeyUnitEvent;
 use crate::drm_kms::gstreamer::{ExportError, push_exported_dmabuf};
 use crate::drm_kms::types::{
     BitrateMode, ColorRange, Colorimetry, EncoderBackend, ExportedDmabuf, FrameRateMode,
-    QualityPreset, VideoCodec,
+    QualityPreset, VideoCodec, Profile,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -53,6 +53,7 @@ pub struct EncoderOptions {
     pub colorimetry: Colorimetry,
     pub encoder_backend: EncoderBackend,
     pub video_codec: VideoCodec,
+    pub profile: Option<Profile>,
 }
 
 impl EncoderOptions {
@@ -107,6 +108,69 @@ fn auto_bitrate_floor_kbps(width: i32, height: i32, fps: u32, mode: &BitrateMode
     let pixels_per_sec = (width.max(1) as f64) * (height.max(1) as f64) * (fps.max(1) as f64);
     let bits_per_sec = pixels_per_sec * quality_bpp_floor(mode);
     ((bits_per_sec / 1000.0).ceil() as u32).max(25_000)
+}
+
+struct ProfileSelection {
+    encoder_profile: &'static str,
+    input_format: &'static str,
+    colorimetry: &'static str,
+}
+
+fn resolve_profile(
+    profile: Profile,
+    backend: &EncoderBackend,
+    codec: &VideoCodec,
+) -> Result<ProfileSelection, EncodeError> {
+    if !matches!(backend, EncoderBackend::Vaapi | EncoderBackend::Qsv) {
+        return Err(EncodeError::Bus(format!(
+            "profile {:?} is only supported on vaapi/qsv backends",
+            profile
+        )));
+    }
+    if !matches!(codec, VideoCodec::H265 | VideoCodec::Av1) {
+        return Err(EncodeError::Bus(format!(
+            "profile {:?} is only supported for h265/av1 codecs",
+            profile
+        )));
+    }
+
+    let out = match (codec, profile) {
+        // HDR10 = 10-bit path
+        (VideoCodec::H265, Profile::Hdr10) => ProfileSelection {
+            encoder_profile: "main-10",
+            input_format: "P010_10LE",
+            colorimetry: "bt2020",
+        },
+        (VideoCodec::Av1, Profile::Hdr10) => ProfileSelection {
+            encoder_profile: "main",
+            input_format: "P010_10LE",
+            colorimetry: "bt2020",
+        },
+
+        // Non-HDR10 profiles stay 8-bit NV12.
+        (VideoCodec::H265, Profile::Hdr) | (VideoCodec::H265, Profile::WideSdr) => {
+            ProfileSelection {
+                encoder_profile: "main",
+                input_format: "NV12",
+                colorimetry: "bt2020",
+            }
+        }
+        (VideoCodec::Av1, Profile::Hdr) | (VideoCodec::Av1, Profile::WideSdr) => {
+            ProfileSelection {
+                encoder_profile: "main",
+                input_format: "NV12",
+                colorimetry: "bt2020",
+            }
+        }
+        (VideoCodec::H265, Profile::Sdr) | (VideoCodec::Av1, Profile::Sdr) => ProfileSelection {
+            encoder_profile: "main",
+            input_format: "NV12",
+            colorimetry: "bt709",
+        },
+        (VideoCodec::H264, _) => unreachable!("validated codec/profile mismatch"),
+    };
+
+    Ok(out)
 }
 
 pub fn recommended_slots(options: &EncoderOptions) -> usize {
@@ -424,6 +488,18 @@ fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
             qpi: 28,
             qpp: 32,
             qpb: 0,
+            min_qp: 24,
+            max_qp: 48,
+            i_frames: 120,
+            b_frames: 0,
+            target_usage: 3,
+            icq_quality: 28,
+            qvbr_quality: 28,
+        },
+        QualityPreset::High => QualityTuning {
+            qpi: 28,
+            qpp: 32,
+            qpb: 0,
             min_qp: 28,
             max_qp: 36,
             i_frames: 90,
@@ -432,7 +508,7 @@ fn quality_tuning(preset: &QualityPreset) -> QualityTuning {
             icq_quality: 28,
             qvbr_quality: 28,
         },
-        QualityPreset::High => QualityTuning {
+        QualityPreset::VeryHigh => QualityTuning {
             qpi: 20,
             qpp: 24,
             qpb: 0,
@@ -525,7 +601,22 @@ impl GstEncoder {
                 options.bitrate_mode
             );
         }
-        let colorimetry = options.colorimetry.to_string();
+        let mut colorimetry = options.colorimetry.to_string();
+        let mut encoder_profile: Option<&'static str> = None;
+        let mut encoder_input_format = "NV12";
+        if let Some(p) = options.profile {
+            let resolved = resolve_profile(p, &options.encoder_backend, &options.video_codec)?;
+            encoder_profile = Some(resolved.encoder_profile);
+            encoder_input_format = resolved.input_format;
+            colorimetry = resolved.colorimetry.to_string();
+            log::info!(
+                "Using profile {:?}: encoder_profile={} input_format={} colorimetry={}",
+                p,
+                resolved.encoder_profile,
+                resolved.input_format,
+                resolved.colorimetry
+            );
+        }
         let tuning = quality_tuning_for(
             &options.encoder_backend,
             &options.video_codec,
@@ -637,14 +728,18 @@ impl GstEncoder {
                         _ => {}
                     }
                 }
+                if let Some(profile) = encoder_profile {
+                    vaapi_props.push(("profile", profile.to_string()));
+                }
                 let vaapi_props = render_encoder_props(enc, vaapi_props);
                 format!(
                     concat!(
                         "! vapostproc ",
-                        "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
+                        "! video/x-raw(memory:VAMemory),format={fmt},width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
                         "! {enc} name=enc {vaapi_props} ",
                         "! {parser} "
                     ),
+                    fmt = encoder_input_format,
                     w = w,
                     h = h,
                     fps = fps,
@@ -669,6 +764,9 @@ impl GstEncoder {
                     ("ref-frames", "1".to_string()),
                     ("cabac", "on".to_string()),
                 ];
+                if let Some(profile) = encoder_profile {
+                    qsv_props.push(("profile", profile.to_string()));
+                }
                 match options.bitrate_mode {
                     BitrateMode::Icq => {
                         qsv_props.push(("icq-quality", tuning.icq_quality.to_string()));
@@ -703,10 +801,11 @@ impl GstEncoder {
                 format!(
                     concat!(
                         "! vapostproc ",
-                        "! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
+                        "! video/x-raw(memory:VAMemory),format={fmt},width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
                         "! {enc} name=enc {qsv_props} ",
                         "! {parser} "
                     ),
+                    fmt = encoder_input_format,
                     w = w,
                     h = h,
                     fps = fps,
@@ -921,7 +1020,7 @@ impl GstEncoder {
             .build();
         let sent = self.appsrc.upcast_ref::<gst::Element>().send_event(event);
         if sent {
-            log::debug!("Requested force keyframe ({reason})");
+            log::trace!("Requested force keyframe ({reason})");
         } else {
             log::warn!("Failed to request force keyframe ({reason})");
         }

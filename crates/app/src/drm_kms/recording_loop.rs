@@ -310,6 +310,7 @@ pub fn run_capture_session(
         colorimetry: options.colorimetry,
         encoder_backend: options.encoder_backend,
         video_codec: options.video_codec,
+        profile: options.profile,
     };
 
     let inflight_slots = crate::encode::recommended_slots(&enc_opts).max(3);

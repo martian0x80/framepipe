@@ -142,6 +142,7 @@ pub enum QualityPreset {
     Low,
     Medium,
     High,
+    VeryHigh,
     Ultra,
 }
 
@@ -151,6 +152,7 @@ impl ToString for QualityPreset {
             QualityPreset::Low => "low".to_string(),
             QualityPreset::Medium => "medium".to_string(),
             QualityPreset::High => "high".to_string(),
+            QualityPreset::VeryHigh => "veryhigh".to_string(),
             QualityPreset::Ultra => "ultra".to_string(),
         }
     }
@@ -188,6 +190,25 @@ impl ToString for VideoCodec {
             VideoCodec::H264 => "h264".to_string(),
             VideoCodec::H265 => "h265".to_string(),
             VideoCodec::Av1 => "av1".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+pub enum Profile {
+    Hdr10, // 10 bit (main-10) + bt2020 + P010_10LE format (+ transfer funct
+    Hdr, // default bit depth (main) + bt2020 + NV12 format
+    WideSdr, // default bit depth (main) + bt2020 + NV12 format
+    Sdr, // default bit depth (main) + bt709 + NV12 format
+}
+
+impl ToString for Profile {
+    fn to_string(&self) -> String {
+        match self {
+            Profile::Hdr10 => "hdr10".to_string(),
+            Profile::Hdr => "hdr".to_string(),
+            Profile::WideSdr => "widesdr".to_string(),
+            Profile::Sdr => "sdr".to_string(),
         }
     }
 }
@@ -233,4 +254,5 @@ pub struct CaptureOptions {
     pub cursor_deadzone_px: f32,
     pub wayland_sync_frequency: f64,
     pub mouse_tracking_file: PathBuf,
+    pub profile: Option<Profile>,
 }

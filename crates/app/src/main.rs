@@ -4,7 +4,6 @@ use eyre::Result;
 mod app;
 mod drm_kms;
 mod encode;
-mod postfx;
 mod shared;
 mod wayland;
 

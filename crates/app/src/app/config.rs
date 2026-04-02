@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use eyre::Result;
 
 use crate::{
-    app::cli::PostfxArgs,
     drm_kms::{
         probe,
         types::{CaptureOptions, CaptureOutput},
@@ -68,46 +67,6 @@ pub fn build_capture_options(
         cursor_deadzone_px: capture.cursor_deadzone_px,
         wayland_sync_frequency: capture.wayland_sync_frequency,
         mouse_tracking_file: PathBuf::from(capture.mouse_tracking_file),
-    })
-}
-
-pub fn build_postfx_setup(
-    input: PathBuf,
-    output: PathBuf,
-    options: PostfxArgs,
-) -> Result<crate::postfx::renderer::PostFxSetup> {
-    Ok(crate::postfx::renderer::PostFxSetup {
-        input,
-        output,
-        mouse_track: options.mouse_track,
-        mouse: crate::postfx::types::MouseEffectConfig {
-            effect: options.effect,
-            sprite_path: options.sprite,
-            blend_mode: options.blend_mode,
-            opacity: options.opacity,
-            scale: options.scale,
-            hotspot_x: options.hotspot_x,
-            hotspot_y: options.hotspot_y,
-            smoothing_ms: options.smoothing_ms,
-            zoom_factor: options.zoom_factor,
-            zoom_radius_px: options.zoom_radius_px,
-            spotlight_radius_px: options.spotlight_radius_px,
-            spotlight_softness: options.spotlight_softness,
-        },
-        transcode: crate::postfx::renderer::PostFxTranscodeConfig {
-            decode_backend: options.decode_backend,
-            decode_codec: options.decode_codec.clone(),
-            encode: crate::encode::EncoderOptions {
-                fps: options.fps,
-                bitrate_kbps: options.bitrate_kbps,
-                frame_rate_mode: options.frame_rate_mode,
-                bitrate_mode: options.bitrate_mode,
-                quality: options.quality,
-                color_range: options.color_range,
-                colorimetry: options.colorimetry,
-                encoder_backend: options.encoder_backend,
-                video_codec: options.video_codec,
-            },
-        },
+        profile: capture.profile,
     })
 }
