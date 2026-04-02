@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::thread;
@@ -26,6 +27,8 @@ pub enum EncodeError {
     Push(#[from] ExportError),
     #[error("bus error: {0}")]
     Bus(String),
+    #[error("invalid encoder configuration: {0}")]
+    InvalidConfig(String),
 }
 
 pub struct GstEncoder {
@@ -113,7 +116,7 @@ fn auto_bitrate_floor_kbps(width: i32, height: i32, fps: u32, mode: &BitrateMode
 struct ProfileSelection {
     encoder_profile: &'static str,
     input_format: &'static str,
-    colorimetry: &'static str,
+    colorimetry: Colorimetry,
 }
 
 fn resolve_profile(
@@ -122,13 +125,13 @@ fn resolve_profile(
     codec: &VideoCodec,
 ) -> Result<ProfileSelection, EncodeError> {
     if !matches!(backend, EncoderBackend::Vaapi | EncoderBackend::Qsv) {
-        return Err(EncodeError::Bus(format!(
+        return Err(EncodeError::InvalidConfig(format!(
             "profile {:?} is only supported on vaapi/qsv backends",
             profile
         )));
     }
     if !matches!(codec, VideoCodec::H265 | VideoCodec::Av1) {
-        return Err(EncodeError::Bus(format!(
+        return Err(EncodeError::InvalidConfig(format!(
             "profile {:?} is only supported for h265/av1 codecs",
             profile
         )));
@@ -139,12 +142,12 @@ fn resolve_profile(
         (VideoCodec::H265, Profile::Hdr10) => ProfileSelection {
             encoder_profile: "main-10",
             input_format: "P010_10LE",
-            colorimetry: "bt2020",
+            colorimetry: Colorimetry::Bt2020,
         },
         (VideoCodec::Av1, Profile::Hdr10) => ProfileSelection {
             encoder_profile: "main",
             input_format: "P010_10LE",
-            colorimetry: "bt2020",
+            colorimetry: Colorimetry::Bt2020,
         },
 
         // Non-HDR10 profiles stay 8-bit NV12.
@@ -152,20 +155,20 @@ fn resolve_profile(
             ProfileSelection {
                 encoder_profile: "main",
                 input_format: "NV12",
-                colorimetry: "bt2020",
+                colorimetry: Colorimetry::Bt2020,
             }
         }
         (VideoCodec::Av1, Profile::Hdr) | (VideoCodec::Av1, Profile::WideSdr) => {
             ProfileSelection {
                 encoder_profile: "main",
                 input_format: "NV12",
-                colorimetry: "bt2020",
+                colorimetry: Colorimetry::Bt2020,
             }
         }
         (VideoCodec::H265, Profile::Sdr) | (VideoCodec::Av1, Profile::Sdr) => ProfileSelection {
             encoder_profile: "main",
             input_format: "NV12",
-            colorimetry: "bt709",
+            colorimetry: Colorimetry::Bt709,
         },
         (VideoCodec::H264, _) => unreachable!("validated codec/profile mismatch"),
     };
@@ -222,6 +225,34 @@ fn qsv_encoder_name(codec: &VideoCodec) -> &'static str {
         VideoCodec::H264 => "qsvh264enc",
         VideoCodec::H265 => "qsvh265enc",
         VideoCodec::Av1 => "qsvav1enc",
+    }
+}
+
+fn h264_profile_from_quality(quality: &QualityPreset) -> &'static str {
+    match quality {
+        QualityPreset::Low => "constrained-baseline",
+        QualityPreset::Medium => "main",
+        QualityPreset::High | QualityPreset::VeryHigh | QualityPreset::Ultra => "high",
+    }
+}
+
+fn encoded_profile_caps(
+    codec: &VideoCodec,
+    profile: Option<&'static str>,
+    quality: &QualityPreset,
+) -> Cow<'static, str> {
+    match (codec, profile) {
+        (VideoCodec::H264, _) => match h264_profile_from_quality(quality) {
+            "constrained-baseline" => {
+                Cow::Borrowed("! video/x-h264,profile=(string)constrained-baseline ")
+            }
+            "main" => Cow::Borrowed("! video/x-h264,profile=(string)main "),
+            "high" => Cow::Borrowed("! video/x-h264,profile=(string)high "),
+            _ => Cow::Borrowed(""),
+        },
+        (VideoCodec::H265, Some(x)) => Cow::Owned(format!("! video/x-h265,profile=(string){x} ")),
+        (VideoCodec::Av1, Some("main")) => Cow::Borrowed("! video/x-av1,profile=(string)main "),
+        _ => Cow::Borrowed(""),
     }
 }
 
@@ -608,13 +639,14 @@ impl GstEncoder {
             let resolved = resolve_profile(p, &options.encoder_backend, &options.video_codec)?;
             encoder_profile = Some(resolved.encoder_profile);
             encoder_input_format = resolved.input_format;
-            colorimetry = resolved.colorimetry.to_string();
+            options.colorimetry = resolved.colorimetry;
+            colorimetry = options.colorimetry.to_string();
             log::info!(
                 "Using profile {:?}: encoder_profile={} input_format={} colorimetry={}",
                 p,
                 resolved.encoder_profile,
                 resolved.input_format,
-                resolved.colorimetry
+                colorimetry
             );
         }
         let tuning = quality_tuning_for(
@@ -654,6 +686,8 @@ impl GstEncoder {
                 let rc = vaapi_rate_control(&options.bitrate_mode, &options.video_codec)?;
                 let enc = vaapi_encoder_name(&options.video_codec);
                 let range = options.color_range.to_string();
+                let profile_caps =
+                    encoded_profile_caps(&options.video_codec, encoder_profile, &options.quality);
                 let mut vaapi_props: Vec<(&'static str, String)> = vec![
                     ("rate-control", rc.to_string()),
                     ("bitrate", bitrate.to_string()),
@@ -728,15 +762,13 @@ impl GstEncoder {
                         _ => {}
                     }
                 }
-                if let Some(profile) = encoder_profile {
-                    vaapi_props.push(("profile", profile.to_string()));
-                }
                 let vaapi_props = render_encoder_props(enc, vaapi_props);
                 format!(
                     concat!(
                         "! vapostproc ",
                         "! video/x-raw(memory:VAMemory),format={fmt},width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
                         "! {enc} name=enc {vaapi_props} ",
+                        "{profile_caps}",
                         "! {parser} "
                     ),
                     fmt = encoder_input_format,
@@ -747,6 +779,7 @@ impl GstEncoder {
                     colorimetry = colorimetry,
                     enc = enc,
                     vaapi_props = vaapi_props.as_str(),
+                    profile_caps = profile_caps,
                     parser = parser,
                 )
             }
@@ -754,6 +787,8 @@ impl GstEncoder {
                 let rc = qsv_rate_control(&options.bitrate_mode, &options.video_codec)?;
                 let enc = qsv_encoder_name(&options.video_codec);
                 let range = options.color_range.to_string();
+                let profile_caps =
+                    encoded_profile_caps(&options.video_codec, encoder_profile, &options.quality);
                 let mut qsv_props: Vec<(&'static str, String)> = vec![
                     ("rate-control", rc.to_string()),
                     ("bitrate", bitrate.to_string()),
@@ -764,9 +799,6 @@ impl GstEncoder {
                     ("ref-frames", "1".to_string()),
                     ("cabac", "on".to_string()),
                 ];
-                if let Some(profile) = encoder_profile {
-                    qsv_props.push(("profile", profile.to_string()));
-                }
                 match options.bitrate_mode {
                     BitrateMode::Icq => {
                         qsv_props.push(("icq-quality", tuning.icq_quality.to_string()));
@@ -803,6 +835,7 @@ impl GstEncoder {
                         "! vapostproc ",
                         "! video/x-raw(memory:VAMemory),format={fmt},width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
                         "! {enc} name=enc {qsv_props} ",
+                        "{profile_caps}",
                         "! {parser} "
                     ),
                     fmt = encoder_input_format,
@@ -813,6 +846,7 @@ impl GstEncoder {
                     colorimetry = colorimetry,
                     enc = enc,
                     qsv_props = qsv_props.as_str(),
+                    profile_caps = profile_caps,
                     parser = parser,
                 )
             }
