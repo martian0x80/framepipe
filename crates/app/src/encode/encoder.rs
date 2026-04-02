@@ -231,8 +231,17 @@ fn qsv_encoder_name(codec: &VideoCodec) -> &'static str {
 fn h264_profile_from_quality(quality: &QualityPreset) -> &'static str {
     match quality {
         QualityPreset::Low => "constrained-baseline",
-        QualityPreset::Medium => "main",
-        QualityPreset::High | QualityPreset::VeryHigh | QualityPreset::Ultra => "high",
+        QualityPreset::Medium | QualityPreset::High => "main",
+        QualityPreset::VeryHigh | QualityPreset::Ultra => "high",
+    }
+}
+
+// note to self: this doesn't work actually, ffprobe report color_transfer=bt2020-12 no matter what transfer function is used
+fn transfer_for_profile(profile: Option<Profile>) -> Option<&'static str> {
+    match profile {
+        Some(Profile::Hdr10) => Some("smpte-st-2084"),
+        Some(Profile::Hdr) => Some("arib-std-b67"),
+        _ => None,
     }
 }
 
@@ -240,20 +249,22 @@ fn encoded_profile_caps(
     codec: &VideoCodec,
     profile: Option<&'static str>,
     quality: &QualityPreset,
+    colorimetry: &str,
+    transfer_fn: Option<&str>,
 ) -> Cow<'static, str> {
-    match (codec, profile) {
-        (VideoCodec::H264, _) => match h264_profile_from_quality(quality) {
-            "constrained-baseline" => {
-                Cow::Borrowed("! video/x-h264,profile=(string)constrained-baseline ")
-            }
-            "main" => Cow::Borrowed("! video/x-h264,profile=(string)main "),
-            "high" => Cow::Borrowed("! video/x-h264,profile=(string)high "),
-            _ => Cow::Borrowed(""),
-        },
-        (VideoCodec::H265, Some(x)) => Cow::Owned(format!("! video/x-h265,profile=(string){x} ")),
-        (VideoCodec::Av1, Some("main")) => Cow::Borrowed("! video/x-av1,profile=(string)main "),
-        _ => Cow::Borrowed(""),
-    }
+    let (media, prof) = match (codec, profile) {
+        (VideoCodec::H264, _) => ("video/x-h264", h264_profile_from_quality(quality)),
+        (VideoCodec::H265, Some(x)) => ("video/x-h265", x),
+        (VideoCodec::Av1, Some("main")) => ("video/x-av1", "main"),
+        _ => return Cow::Borrowed(""),
+    };
+    let s = match transfer_fn {
+        Some(tf) => format!(
+            "! {media},profile=(string){prof},colorimetry=(string){colorimetry},transfer-function=(string){tf} "
+        ),
+        None => format!("! {media},profile=(string){prof},colorimetry=(string){colorimetry} "),
+    };
+    Cow::Owned(s)
 }
 
 fn encoder_supported_props(factory_name: &str) -> Option<HashSet<String>> {
@@ -315,18 +326,22 @@ fn set_appsrc_caps(
     let fps = opts.fps.max(1);
     let range = &opts.color_range.to_string();
     let colorimetry = opts.colorimetry.to_string();
+    let transfer_suffix = transfer_for_profile(opts.profile)
+        .map(|tf| format!(",transfer-function=(string){tf}"))
+        .unwrap_or_default();
 
     // Some drivers expose DMA_DRM AB24 only for specific non-linear modifiers.
     // If exporter gives linear modifier (0), prefer plain raw caps for compatibility.
     if ex.modifier == 0 {
         let raw_fallback = format!(
-            "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
+            "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
             raw,
             ex.width,
             ex.height,
             fps,
             range,
-            colorimetry.as_str()
+            colorimetry.as_str(),
+            transfer_suffix.as_str()
         );
         if let Ok(caps) = gst::Caps::from_str(&raw_fallback) {
             log::debug!("Using appsrc caps (linear modifier fallback): {raw_fallback}");
@@ -338,13 +353,14 @@ fn set_appsrc_caps(
     if let Some(drm) = drm {
         let drm_with_mod = format!("{drm}:0x{:016x}", ex.modifier);
         let full_with_mod = format!(
-            "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
+            "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
             drm_with_mod,
             ex.width,
             ex.height,
             fps,
             range,
-            colorimetry.as_str()
+            colorimetry.as_str(),
+            transfer_suffix.as_str()
         );
         match gst::Caps::from_str(&full_with_mod) {
             Ok(caps) => {
@@ -358,13 +374,14 @@ fn set_appsrc_caps(
         }
 
         let full = format!(
-            "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
+            "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
             drm,
             ex.width,
             ex.height,
             fps,
             range,
-            colorimetry.as_str()
+            colorimetry.as_str(),
+            transfer_suffix.as_str()
         );
         match gst::Caps::from_str(&full) {
             Ok(caps) => {
@@ -379,13 +396,14 @@ fn set_appsrc_caps(
     }
 
     let dmabuf_raw = format!(
-        "video/x-raw(memory:DMABuf),format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
+        "video/x-raw(memory:DMABuf),format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
         raw,
         ex.width,
         ex.height,
         fps,
         range,
-        colorimetry.as_str()
+        colorimetry.as_str(),
+        transfer_suffix.as_str()
     );
     if let Ok(caps) = gst::Caps::from_str(&dmabuf_raw) {
         log::debug!("Using appsrc caps: {dmabuf_raw}");
@@ -394,13 +412,14 @@ fn set_appsrc_caps(
     }
 
     let raw_fallback = format!(
-        "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}",
+        "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
         raw,
         ex.width,
         ex.height,
         fps,
         range,
-        colorimetry.as_str()
+        colorimetry.as_str(),
+        transfer_suffix.as_str()
     );
     let caps = gst::Caps::from_str(&raw_fallback)
         .map_err(|e| format!("fallback caps parse failed: {e}"))?;
@@ -633,6 +652,7 @@ impl GstEncoder {
             );
         }
         let mut colorimetry = options.colorimetry.to_string();
+        let transfer_fn = transfer_for_profile(options.profile);
         let mut encoder_profile: Option<&'static str> = None;
         let mut encoder_input_format = "NV12";
         if let Some(p) = options.profile {
@@ -642,11 +662,12 @@ impl GstEncoder {
             options.colorimetry = resolved.colorimetry;
             colorimetry = options.colorimetry.to_string();
             log::info!(
-                "Using profile {:?}: encoder_profile={} input_format={} colorimetry={}",
+                "Using profile {:?}: encoder_profile={} input_format={} colorimetry={} transfer={:?}",
                 p,
                 resolved.encoder_profile,
                 resolved.input_format,
-                colorimetry
+                colorimetry,
+                transfer_fn
             );
         }
         let tuning = quality_tuning_for(
@@ -687,7 +708,13 @@ impl GstEncoder {
                 let enc = vaapi_encoder_name(&options.video_codec);
                 let range = options.color_range.to_string();
                 let profile_caps =
-                    encoded_profile_caps(&options.video_codec, encoder_profile, &options.quality);
+                    encoded_profile_caps(
+                        &options.video_codec,
+                        encoder_profile,
+                        &options.quality,
+                        colorimetry.as_str(),
+                        transfer_fn,
+                    );
                 let mut vaapi_props: Vec<(&'static str, String)> = vec![
                     ("rate-control", rc.to_string()),
                     ("bitrate", bitrate.to_string()),
@@ -727,7 +754,7 @@ impl GstEncoder {
                     // TODO: debug why setting i-frames makes the encoder shit itself
                     // vaapi_props.push(("i-frames", tuning.i_frames.to_string()));
                     // vaapi_props.push(("b-frames", tuning.b_frames.to_string()));
-                    vaapi_props.push(("ref-frames", "1".to_string()));
+                    vaapi_props.push(("ref-frames", "3".to_string()));
                     match options.bitrate_mode {
                         // Clamp max-qp for quality consistency.
                         BitrateMode::Cbr => {
@@ -788,7 +815,13 @@ impl GstEncoder {
                 let enc = qsv_encoder_name(&options.video_codec);
                 let range = options.color_range.to_string();
                 let profile_caps =
-                    encoded_profile_caps(&options.video_codec, encoder_profile, &options.quality);
+                    encoded_profile_caps(
+                        &options.video_codec,
+                        encoder_profile,
+                        &options.quality,
+                        colorimetry.as_str(),
+                        transfer_fn,
+                    );
                 let mut qsv_props: Vec<(&'static str, String)> = vec![
                     ("rate-control", rc.to_string()),
                     ("bitrate", bitrate.to_string()),
@@ -796,8 +829,7 @@ impl GstEncoder {
                     // ("low-latency", "true".to_string()),
                     // ("target-usage", tuning.target_usage.to_string()),
                     ("b-frames", tuning.b_frames.to_string()),
-                    ("ref-frames", "1".to_string()),
-                    ("cabac", "on".to_string()),
+                    ("ref-frames", "3".to_string()),
                 ];
                 match options.bitrate_mode {
                     BitrateMode::Icq => {
