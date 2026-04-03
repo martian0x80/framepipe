@@ -117,6 +117,14 @@ pub struct CaptureArgs {
     pub cursor_smear_alpha_exp: f32,
     #[arg(long = "cursor-smear-alpha-scale", default_value_t = 0.4, help = "Overall smear alpha scale")]
     pub cursor_smear_alpha_scale: f32,
+    #[arg(long = "cursor-smear-stretch-threshold", default_value_t = 300.0, help = "Speed threshold (px/s) where stretch deformation starts")]
+    pub cursor_smear_stretch_threshold: f32,
+    #[arg(long = "cursor-smear-stretch-range", default_value_t = 1800.0, help = "Speed range (px/s) to reach maximum stretch")]
+    pub cursor_smear_stretch_range: f32,
+    #[arg(long = "cursor-smear-max-stretch", default_value_t = 2.0, help = "Maximum extra stretch factor (final = 1 + value)")]
+    pub cursor_smear_max_stretch: f32,
+    #[arg(long = "cursor-smear-max-squash", default_value_t = 0.15, help = "Maximum perpendicular squash amount (final = 1 - value)")]
+    pub cursor_smear_max_squash: f32,
     #[arg(
         long,
         default_value_t = 0.5,

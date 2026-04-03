@@ -542,6 +542,10 @@ pub fn run_capture_session(
                     };
                     let mut taps: Vec<[f32; 3]> = Vec::with_capacity(8);
                     taps.push([s_cursor_x, s_cursor_y, 1.0]);
+                    let mut motion_dir_x = 1.0f32;
+                    let mut motion_dir_y = 0.0f32;
+                    let mut motion_stretch = 1.0f32;
+                    let mut motion_squash = 1.0f32;
 
                     if options.cursor_smear {
                         if let Some((prev_x, prev_y, prev_t)) = last_cursor_sample {
@@ -555,8 +559,8 @@ pub fn run_capture_session(
                                 let min_len = options.cursor_smear_min_len.max(0.0);
                                 let max_len = options.cursor_smear_max_len.max(min_len);
                                 let blur_len = (speed * shutter_seconds).clamp(min_len, max_len);
-                                let dir_x = vx / speed;
-                                let dir_y = vy / speed;
+                                motion_dir_x = vx / speed;
+                                motion_dir_y = vy / speed;
                                 let extra_taps = options.cursor_smear_taps.clamp(1, 8) as usize;
                                 let alpha_exp = options.cursor_smear_alpha_exp.max(0.05);
                                 let alpha_scale = options.cursor_smear_alpha_scale.clamp(0.0, 1.0);
@@ -565,17 +569,38 @@ pub fn run_capture_session(
                                     let alpha = ((1.0 - t).powf(alpha_exp) * alpha_scale)
                                         .clamp(0.0, 1.0);
                                     taps.push([
-                                        s_cursor_x - dir_x * blur_len * t,
-                                        s_cursor_y - dir_y * blur_len * t,
+                                        s_cursor_x - motion_dir_x * blur_len * t,
+                                        s_cursor_y - motion_dir_y * blur_len * t,
                                         alpha,
                                     ]);
                                 }
+
+                                // Stretch cursor shape along motion axis.
+                                let stretch_threshold =
+                                    options.cursor_smear_stretch_threshold.max(0.0);
+                                let stretch_range =
+                                    options.cursor_smear_stretch_range.max(1.0);
+                                let s = ((speed - stretch_threshold) / stretch_range)
+                                    .clamp(0.0, 1.0);
+                                motion_stretch =
+                                    1.0 + options.cursor_smear_max_stretch.max(0.0) * s;
+                                motion_squash =
+                                    1.0 - options.cursor_smear_max_squash.clamp(0.0, 0.95) * s;
                             }
                         }
                     }
                     last_cursor_sample = Some((s_cursor_x, s_cursor_y, now));
 
-                    gpu_pipeline::CursorState::with_blur_samples(*ctex, cursor_w, cursor_h, taps)
+                    gpu_pipeline::CursorState::with_blur_samples(
+                        *ctex,
+                        cursor_w,
+                        cursor_h,
+                        taps,
+                        motion_dir_x,
+                        motion_dir_y,
+                        motion_stretch,
+                        motion_squash,
+                    )
                 } else {
                     cursor_state_empty.clone()
                 }

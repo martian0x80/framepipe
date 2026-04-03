@@ -8,6 +8,10 @@ pub struct CursorState {
     pub w: f32,
     pub h: f32,
     pub taps: Vec<[f32; 3]>, // x, y, alpha in output pixel space
+    pub dir_x: f32,
+    pub dir_y: f32,
+    pub stretch: f32,
+    pub squash: f32,
 }
 
 impl CursorState {
@@ -17,6 +21,10 @@ impl CursorState {
             w: 0.0,
             h: 0.0,
             taps: Vec::new(),
+            dir_x: 1.0,
+            dir_y: 0.0,
+            stretch: 1.0,
+            squash: 1.0,
         }
     }
 
@@ -26,6 +34,10 @@ impl CursorState {
             w,
             h,
             taps: vec![[x, y, 1.0]],
+            dir_x: 1.0,
+            dir_y: 0.0,
+            stretch: 1.0,
+            squash: 1.0,
         }
     }
 
@@ -34,6 +46,10 @@ impl CursorState {
         w: f32,
         h: f32,
         mut taps: Vec<[f32; 3]>,
+        dir_x: f32,
+        dir_y: f32,
+        stretch: f32,
+        squash: f32,
     ) -> Self {
         if taps.len() > MAX_CURSOR_TAPS {
             taps.truncate(MAX_CURSOR_TAPS);
@@ -43,6 +59,10 @@ impl CursorState {
             w,
             h,
             taps,
+            dir_x,
+            dir_y,
+            stretch,
+            squash,
         }
     }
 }
@@ -161,6 +181,9 @@ impl GpuPipeline {
             uniform int u_cursor_tap_count;
             uniform vec3 u_cursor_taps[8]; // x,y,alpha in output pixel space
             uniform vec2 u_cursor_size_px; // w,h
+            uniform vec2 u_cursor_dir;
+            uniform float u_cursor_stretch;
+            uniform float u_cursor_squash;
             uniform vec2 u_out_size;
             out vec4 o;
 
@@ -176,10 +199,20 @@ impl GpuPipeline {
                     vec2 cmin = u_cursor_taps[i].xy;
                     vec2 cmax = cmin + u_cursor_size_px;
                     if (p.x >= cmin.x && p.y >= cmin.y && p.x < cmax.x && p.y < cmax.y) {
-                        vec2 cuv = (p - cmin) / u_cursor_size_px;
+                        vec2 center = cmin + 0.5 * u_cursor_size_px;
+                        vec2 local = p - center;
+                        vec2 dir = normalize(u_cursor_dir);
+                        vec2 perp = vec2(-dir.y, dir.x);
+                        float a = dot(local, dir);
+                        float b = dot(local, perp);
+                        float stretch = max(u_cursor_stretch, 0.001);
+                        float squash = max(u_cursor_squash, 0.001);
+                        vec2 deformed = dir * (a / stretch) + perp * (b / squash);
+                        vec2 sample_p = center + deformed;
+                        vec2 cuv = (sample_p - cmin) / u_cursor_size_px;
                         vec4 c = texture(u_cursor, cuv);
-                        float a = clamp(c.a * u_cursor_taps[i].z, 0.0, 1.0);
-                        base.rgb = c.rgb * a + base.rgb * (1.0 - a);
+                        float alpha = clamp(c.a * u_cursor_taps[i].z, 0.0, 1.0);
+                        base.rgb = c.rgb * alpha + base.rgb * (1.0 - alpha);
                         base.a = 1.0;
                     }
                 }
@@ -321,6 +354,25 @@ impl GpuPipeline {
                     .as_ref(),
                 cursor.w,
                 cursor.h,
+            );
+            self.gl.uniform_2_f32(
+                self.gl
+                    .get_uniform_location(self.prog, "u_cursor_dir")
+                    .as_ref(),
+                cursor.dir_x,
+                cursor.dir_y,
+            );
+            self.gl.uniform_1_f32(
+                self.gl
+                    .get_uniform_location(self.prog, "u_cursor_stretch")
+                    .as_ref(),
+                cursor.stretch,
+            );
+            self.gl.uniform_1_f32(
+                self.gl
+                    .get_uniform_location(self.prog, "u_cursor_squash")
+                    .as_ref(),
+                cursor.squash,
             );
 
             let mut taps_flat = [0.0f32; MAX_CURSOR_TAPS * 3];
