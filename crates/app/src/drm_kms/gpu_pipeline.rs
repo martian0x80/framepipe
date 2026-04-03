@@ -1,32 +1,48 @@
 use glow::HasContext;
 
+const MAX_CURSOR_TAPS: usize = 8;
+
 #[derive(Clone)]
 pub struct CursorState {
     pub tex: Option<glow::NativeTexture>,
-    pub x: f32,
-    pub y: f32,
     pub w: f32,
     pub h: f32,
+    pub taps: Vec<[f32; 3]>, // x, y, alpha in output pixel space
 }
 
 impl CursorState {
     pub fn empty() -> Self {
         Self {
             tex: None,
-            x: 0.0,
-            y: 0.0,
             w: 0.0,
             h: 0.0,
+            taps: Vec::new(),
         }
     }
 
     pub fn with_position(tex: glow::NativeTexture, x: f32, y: f32, w: f32, h: f32) -> Self {
         Self {
             tex: Some(tex),
-            x,
-            y,
             w,
             h,
+            taps: vec![[x, y, 1.0]],
+        }
+    }
+
+    pub fn with_blur_samples(
+        tex: glow::NativeTexture,
+        w: f32,
+        h: f32,
+        mut taps: Vec<[f32; 3]>,
+    ) -> Self {
+        if taps.len() > MAX_CURSOR_TAPS {
+            taps.truncate(MAX_CURSOR_TAPS);
+        }
+        Self {
+            tex: Some(tex),
+            w,
+            h,
+            taps,
         }
     }
 }
@@ -142,23 +158,27 @@ impl GpuPipeline {
             in vec2 v_uv;
             uniform sampler2D u_src;
             uniform sampler2D u_cursor;
-            uniform int u_has_cursor;
-            uniform vec4 u_cursor_rect_px; // x,y,w,h in output pixel space
+            uniform int u_cursor_tap_count;
+            uniform vec3 u_cursor_taps[8]; // x,y,alpha in output pixel space
+            uniform vec2 u_cursor_size_px; // w,h
             uniform vec2 u_out_size;
             out vec4 o;
 
             void main() {
                 vec2 uv = v_uv;
                 vec4 base = texture(u_src, uv);
+                vec2 p = uv * u_out_size; // output pixel space
 
-                if (u_has_cursor == 1) {
-                    vec2 p = uv * u_out_size; // output pixel space
-                    vec2 cmin = u_cursor_rect_px.xy;
-                    vec2 cmax = cmin + u_cursor_rect_px.zw;
+                for (int i = 0; i < 8; i++) {
+                    if (i >= u_cursor_tap_count) {
+                        break;
+                    }
+                    vec2 cmin = u_cursor_taps[i].xy;
+                    vec2 cmax = cmin + u_cursor_size_px;
                     if (p.x >= cmin.x && p.y >= cmin.y && p.x < cmax.x && p.y < cmax.y) {
-                        vec2 cuv = (p - cmin) / u_cursor_rect_px.zw;
+                        vec2 cuv = (p - cmin) / u_cursor_size_px;
                         vec4 c = texture(u_cursor, cuv);
-                        float a = clamp(c.a, 0.0, 1.0);
+                        float a = clamp(c.a * u_cursor_taps[i].z, 0.0, 1.0);
                         base.rgb = c.rgb * a + base.rgb * (1.0 - a);
                         base.a = 1.0;
                     }
@@ -277,12 +297,16 @@ impl GpuPipeline {
                 .uniform_1_i32(self.gl.get_uniform_location(self.prog, "u_src").as_ref(), 0);
             log::trace!("Source texture bound and uniform set");
 
-            let has_cursor = cursor.tex.is_some() as i32;
+            let tap_count = if cursor.tex.is_some() {
+                cursor.taps.len().min(MAX_CURSOR_TAPS) as i32
+            } else {
+                0
+            };
             self.gl.uniform_1_i32(
                 self.gl
-                    .get_uniform_location(self.prog, "u_has_cursor")
+                    .get_uniform_location(self.prog, "u_cursor_tap_count")
                     .as_ref(),
-                has_cursor,
+                tap_count,
             );
             self.gl.uniform_2_f32(
                 self.gl
@@ -291,14 +315,26 @@ impl GpuPipeline {
                 self.out_w as f32,
                 self.out_h as f32,
             );
-            self.gl.uniform_4_f32(
+            self.gl.uniform_2_f32(
                 self.gl
-                    .get_uniform_location(self.prog, "u_cursor_rect_px")
+                    .get_uniform_location(self.prog, "u_cursor_size_px")
                     .as_ref(),
-                cursor.x,
-                cursor.y,
                 cursor.w,
                 cursor.h,
+            );
+
+            let mut taps_flat = [0.0f32; MAX_CURSOR_TAPS * 3];
+            for (i, tap) in cursor.taps.iter().take(MAX_CURSOR_TAPS).enumerate() {
+                let base = i * 3;
+                taps_flat[base] = tap[0];
+                taps_flat[base + 1] = tap[1];
+                taps_flat[base + 2] = tap[2];
+            }
+            self.gl.uniform_3_f32_slice(
+                self.gl
+                    .get_uniform_location(self.prog, "u_cursor_taps")
+                    .as_ref(),
+                &taps_flat,
             );
 
             if let Some(ctex) = cursor.tex {

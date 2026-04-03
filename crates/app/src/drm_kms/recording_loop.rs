@@ -443,6 +443,7 @@ pub fn run_capture_session(
     let mut frame_idx: u64 = 0;
     let mut last_forced_keyframe_frame: u64 = 0;
     let mut last_cursor_update = Instant::now();
+    let mut last_cursor_sample: Option<(f32, f32, Instant)> = None;
     encoder
         .push_frame(&first_exported)
         .map_err(|e| EglError::Pipeline(e.to_string()))?;
@@ -539,9 +540,42 @@ pub fn run_capture_session(
                     } else {
                         (cursor_x, cursor_y)
                     };
-                    gpu_pipeline::CursorState::with_position(
-                        *ctex, s_cursor_x, s_cursor_y, cursor_w, cursor_h,
-                    )
+                    let mut taps: Vec<[f32; 3]> = Vec::with_capacity(8);
+                    taps.push([s_cursor_x, s_cursor_y, 1.0]);
+
+                    if options.cursor_smear {
+                        if let Some((prev_x, prev_y, prev_t)) = last_cursor_sample {
+                            let vdt = (now - prev_t).as_secs_f32().max(1e-4);
+                            let vx = (s_cursor_x - prev_x) / vdt;
+                            let vy = (s_cursor_y - prev_y) / vdt;
+                            let speed = (vx * vx + vy * vy).sqrt();
+                            if speed > options.cursor_smear_speed_threshold.max(0.0) {
+                                let shutter_seconds =
+                                    (1.0 / fps as f32) * options.cursor_smear_shutter_scale.max(0.0);
+                                let min_len = options.cursor_smear_min_len.max(0.0);
+                                let max_len = options.cursor_smear_max_len.max(min_len);
+                                let blur_len = (speed * shutter_seconds).clamp(min_len, max_len);
+                                let dir_x = vx / speed;
+                                let dir_y = vy / speed;
+                                let extra_taps = options.cursor_smear_taps.clamp(1, 8) as usize;
+                                let alpha_exp = options.cursor_smear_alpha_exp.max(0.05);
+                                let alpha_scale = options.cursor_smear_alpha_scale.clamp(0.0, 1.0);
+                                for i in 1..=extra_taps {
+                                    let t = i as f32 / extra_taps as f32;
+                                    let alpha = ((1.0 - t).powf(alpha_exp) * alpha_scale)
+                                        .clamp(0.0, 1.0);
+                                    taps.push([
+                                        s_cursor_x - dir_x * blur_len * t,
+                                        s_cursor_y - dir_y * blur_len * t,
+                                        alpha,
+                                    ]);
+                                }
+                            }
+                        }
+                    }
+                    last_cursor_sample = Some((s_cursor_x, s_cursor_y, now));
+
+                    gpu_pipeline::CursorState::with_blur_samples(*ctex, cursor_w, cursor_h, taps)
                 } else {
                     cursor_state_empty.clone()
                 }
