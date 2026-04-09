@@ -197,8 +197,8 @@ impl ToString for VideoCodec {
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
 pub enum Profile {
     Hdr10, // 10 bit (main-10) + bt2020 + P010_10LE format (+ transfer funct
-    Hdr, // default bit depth (main) + bt2020 + NV12 format
-    Sdr, // default bit depth (main) + bt709 + NV12 format
+    Hdr,   // default bit depth (main) + bt2020 + NV12 format
+    Sdr,   // default bit depth (main) + bt709 + NV12 format
 }
 
 impl ToString for Profile {

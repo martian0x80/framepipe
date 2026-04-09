@@ -1,8 +1,8 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -115,7 +115,10 @@ impl MouseTrackerLibinput {
         input_fds: Option<HashMap<PathBuf, OwnedFd>>,
     ) -> Result<Self, String> {
         let iface = if let Some(map) = input_fds {
-            log::info!("mouse tracker using {} preopened input fds from privd", map.len());
+            log::info!(
+                "mouse tracker using {} preopened input fds from privd",
+                map.len()
+            );
             for p in map.keys() {
                 log::trace!("preopened input fd path: {}", p.display());
             }

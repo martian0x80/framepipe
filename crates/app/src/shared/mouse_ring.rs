@@ -53,7 +53,7 @@ impl RingBuffer {
 
         for i in start..write {
             let slot = i & (self.capacity - 1);
-            let event = unsafe { (*self.buffer[slot as usize].get()).clone() };
+            let event = unsafe { *self.buffer[slot as usize].get() };
             if let Some(e) = event {
                 if e.t_ns <= pts_ns {
                     best = Some(e);

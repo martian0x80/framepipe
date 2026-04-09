@@ -86,12 +86,7 @@ impl PrivdSession {
                     },
                 );
                 if self.fb_cache.len() > 8 {
-                    if let Some(victim) = self
-                        .fb_cache
-                        .keys()
-                        .copied()
-                        .find(|id| *id != fb_id)
-                    {
+                    if let Some(victim) = self.fb_cache.keys().copied().find(|id| *id != fb_id) {
                         self.fb_cache.remove(&victim);
                     }
                 }
@@ -114,7 +109,10 @@ impl PrivdSession {
     }
 }
 
-pub fn acquire_device_fds(card_path: &str, include_input_fds: bool) -> Result<PrivdSession, PrivdError> {
+pub fn acquire_device_fds(
+    card_path: &str,
+    include_input_fds: bool,
+) -> Result<PrivdSession, PrivdError> {
     log::info!(
         "acquire_device_fds: card_path={} include_input_fds={}",
         card_path,
@@ -156,7 +154,8 @@ pub fn acquire_device_fds(card_path: &str, include_input_fds: bool) -> Result<Pr
     log::debug!("sending StartSession request");
     send_packet(&client, &req, &[]).map_err(PrivdError::Io)?;
 
-    let (resp, mut fds): (IpcResponse, Vec<OwnedFd>) = recv_packet(&client).map_err(PrivdError::Io)?;
+    let (resp, mut fds): (IpcResponse, Vec<OwnedFd>) =
+        recv_packet(&client).map_err(PrivdError::Io)?;
     log::debug!("received privd response with {} fds", fds.len());
     let (input_devices, returned_card_path) = match resp {
         IpcResponse::SessionReady {
@@ -168,7 +167,7 @@ pub fn acquire_device_fds(card_path: &str, include_input_fds: bool) -> Result<Pr
             return Err(PrivdError::Protocol(format!(
                 "unexpected response to StartSession: {:?}",
                 other
-            )))
+            )));
         }
     };
 

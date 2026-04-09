@@ -4,11 +4,11 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
+use drm::CLOEXEC;
 use drm::ClientCapability::{Atomic, UniversalPlanes};
 use drm::Device as BasicDevice;
 use drm::control::Device as ControlDevice;
 use drm::control::framebuffer;
-use drm::CLOEXEC;
 use thiserror::Error;
 
 use common::ipc::{recv_packet, send_packet};
@@ -86,32 +86,30 @@ fn run() -> eyre::Result<()> {
             IpcRequest::StartSession {
                 card_path,
                 include_input_fds,
-            } => {
-                match start_session(&card_path, include_input_fds) {
-                    Ok(s) => {
-                        let resp = IpcResponse::SessionReady {
-                            card_path: s.card_path.clone(),
-                            input_devices: s.input_infos.clone(),
-                        };
-                        let mut raw_fds = Vec::new();
-                        raw_fds.push(s.card.0.as_raw_fd());
-                        for fd in &s._held_input_fds {
-                            raw_fds.push(fd.as_raw_fd());
-                        }
-                        send_packet(&stream, &resp, &raw_fds)
-                            .map_err(|e| PrivdError::IpcSend(e.to_string()))?;
-                        log::info!(
-                            "session ready sent: drm=1 inputs={} total_fds={}",
-                            s.input_infos.len(),
-                            raw_fds.len()
-                        );
-                        state = Some(s);
+            } => match start_session(&card_path, include_input_fds) {
+                Ok(s) => {
+                    let resp = IpcResponse::SessionReady {
+                        card_path: s.card_path.clone(),
+                        input_devices: s.input_infos.clone(),
+                    };
+                    let mut raw_fds = Vec::new();
+                    raw_fds.push(s.card.0.as_raw_fd());
+                    for fd in &s._held_input_fds {
+                        raw_fds.push(fd.as_raw_fd());
                     }
-                    Err(e) => {
-                        let _ = send_error(&stream, e.to_string());
-                    }
+                    send_packet(&stream, &resp, &raw_fds)
+                        .map_err(|e| PrivdError::IpcSend(e.to_string()))?;
+                    log::info!(
+                        "session ready sent: drm=1 inputs={} total_fds={}",
+                        s.input_infos.len(),
+                        raw_fds.len()
+                    );
+                    state = Some(s);
                 }
-            }
+                Err(e) => {
+                    let _ = send_error(&stream, e.to_string());
+                }
+            },
             IpcRequest::ExportFramebuffer { fb_id } => {
                 let Some(session) = state.as_ref() else {
                     let _ = send_error(&stream, PrivdError::SessionNotInitialized.to_string());
@@ -218,19 +216,19 @@ fn export_framebuffer(
     session: &SessionState,
     fb_id: u32,
 ) -> Result<(ExportedFrameInfo, Vec<OwnedFd>), PrivdError> {
-    let fb = framebuffer::Handle::from(NonZeroU32::new(fb_id).ok_or(
-        PrivdError::ExportFramebuffer {
+    let fb =
+        framebuffer::Handle::from(NonZeroU32::new(fb_id).ok_or(PrivdError::ExportFramebuffer {
             fb_id,
             message: "invalid fb id 0".to_string(),
-        },
-    )?);
-    let fb_info = session
-        .card
-        .get_planar_framebuffer(fb)
-        .map_err(|e| PrivdError::ExportFramebuffer {
-            fb_id,
-            message: format!("get_planar_framebuffer failed: {e}"),
-        })?;
+        })?);
+    let fb_info =
+        session
+            .card
+            .get_planar_framebuffer(fb)
+            .map_err(|e| PrivdError::ExportFramebuffer {
+                fb_id,
+                message: format!("get_planar_framebuffer failed: {e}"),
+            })?;
 
     let mut plane_fds = Vec::new();
     for (i, buf) in fb_info.buffers().iter().enumerate() {

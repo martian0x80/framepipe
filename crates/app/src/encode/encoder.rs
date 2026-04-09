@@ -11,8 +11,8 @@ use gstreamer_video::DownstreamForceKeyUnitEvent;
 
 use crate::drm_kms::gstreamer::{ExportError, push_exported_dmabuf};
 use crate::drm_kms::types::{
-    BitrateMode, ColorRange, Colorimetry, EncoderBackend, ExportedDmabuf, FrameRateMode,
-    QualityPreset, VideoCodec, Profile,
+    BitrateMode, ColorRange, Colorimetry, EncoderBackend, ExportedDmabuf, FrameRateMode, Profile,
+    QualityPreset, VideoCodec,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -151,20 +151,16 @@ fn resolve_profile(
         },
 
         // Non-HDR10 profiles stay 8-bit NV12.
-        (VideoCodec::H265, Profile::Hdr) => {
-            ProfileSelection {
-                encoder_profile: "main",
-                input_format: "NV12",
-                colorimetry: Colorimetry::Bt2020,
-            }
-        }
-        (VideoCodec::Av1, Profile::Hdr) => {
-            ProfileSelection {
-                encoder_profile: "main",
-                input_format: "NV12",
-                colorimetry: Colorimetry::Bt2020,
-            }
-        }
+        (VideoCodec::H265, Profile::Hdr) => ProfileSelection {
+            encoder_profile: "main",
+            input_format: "NV12",
+            colorimetry: Colorimetry::Bt2020,
+        },
+        (VideoCodec::Av1, Profile::Hdr) => ProfileSelection {
+            encoder_profile: "main",
+            input_format: "NV12",
+            colorimetry: Colorimetry::Bt2020,
+        },
         (VideoCodec::H265, Profile::Sdr) | (VideoCodec::Av1, Profile::Sdr) => ProfileSelection {
             encoder_profile: "main",
             input_format: "NV12",
@@ -707,14 +703,13 @@ impl GstEncoder {
                 let rc = vaapi_rate_control(&options.bitrate_mode, &options.video_codec)?;
                 let enc = vaapi_encoder_name(&options.video_codec);
                 let range = options.color_range.to_string();
-                let profile_caps =
-                    encoded_profile_caps(
-                        &options.video_codec,
-                        encoder_profile,
-                        &options.quality,
-                        colorimetry.as_str(),
-                        transfer_fn,
-                    );
+                let profile_caps = encoded_profile_caps(
+                    &options.video_codec,
+                    encoder_profile,
+                    &options.quality,
+                    colorimetry.as_str(),
+                    transfer_fn,
+                );
                 let mut vaapi_props: Vec<(&'static str, String)> = vec![
                     ("rate-control", rc.to_string()),
                     ("bitrate", bitrate.to_string()),
@@ -814,14 +809,13 @@ impl GstEncoder {
                 let rc = qsv_rate_control(&options.bitrate_mode, &options.video_codec)?;
                 let enc = qsv_encoder_name(&options.video_codec);
                 let range = options.color_range.to_string();
-                let profile_caps =
-                    encoded_profile_caps(
-                        &options.video_codec,
-                        encoder_profile,
-                        &options.quality,
-                        colorimetry.as_str(),
-                        transfer_fn,
-                    );
+                let profile_caps = encoded_profile_caps(
+                    &options.video_codec,
+                    encoder_profile,
+                    &options.quality,
+                    colorimetry.as_str(),
+                    transfer_fn,
+                );
                 let mut qsv_props: Vec<(&'static str, String)> = vec![
                     ("rate-control", rc.to_string()),
                     ("bitrate", bitrate.to_string()),

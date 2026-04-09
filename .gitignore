@@ -7,3 +7,10 @@ target
 openstudio-frames
 *.mp4
 *.ppm
+# heaptrack
+*.zst
+
+*.bitcode
+
+# dhat
+dhat.*

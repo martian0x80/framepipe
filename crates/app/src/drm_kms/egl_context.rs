@@ -33,12 +33,12 @@ const EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT: i32 = 0x3448;
 const EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT: i32 = 0x3449;
 const EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT: i32 = 0x344A;
 
-const EGL_PLATFORM_GBM_KHR: u32 = 0x31D7;
+// const EGL_PLATFORM_GBM_KHR: u32 = 0x31D7;
 const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
 
 #[derive(Debug, Clone, Copy)]
 pub enum EglBackend {
-    Gbm,
+    // Gbm,
     Surfaceless,
 }
 
@@ -187,7 +187,8 @@ fn init_display_common(
 ) -> Result<(khronos_egl::Context, khronos_egl::Surface), EglError> {
     egl_i.initialize(display).map_err(EglError::EglInit)?;
 
-    let dext = egl_i.query_string(Some(display), khronos_egl::EXTENSIONS)
+    let dext = egl_i
+        .query_string(Some(display), khronos_egl::EXTENSIONS)
         .map_err(EglError::QueryExt)?
         .to_str()
         .map_err(|_| EglError::Unknown)?
@@ -217,7 +218,8 @@ fn init_display_common(
         khronos_egl::NONE,
     ];
 
-    let config = egl_i.choose_first_config(display, &cfg_attribs)
+    let config = egl_i
+        .choose_first_config(display, &cfg_attribs)
         .map_err(|_| EglError::ChooseConfig)?
         .ok_or(EglError::ChooseConfig)?;
 
@@ -228,15 +230,20 @@ fn init_display_common(
         1,
         khronos_egl::NONE,
     ];
-    let surface = egl_i.create_pbuffer_surface(display, config, &pbuf_attribs)
+    let surface = egl_i
+        .create_pbuffer_surface(display, config, &pbuf_attribs)
         .map_err(|_| EglError::ChooseConfig)?;
 
-    egl_i.bind_api(khronos_egl::OPENGL_ES_API).map_err(|e| EglError::EglInit(e))?;
+    egl_i
+        .bind_api(khronos_egl::OPENGL_ES_API)
+        .map_err(|e| EglError::EglInit(e))?;
     let ctx_attribs = [khronos_egl::CONTEXT_CLIENT_VERSION, 3, khronos_egl::NONE];
-    let context = egl_i.create_context(display, config, None, &ctx_attribs)
+    let context = egl_i
+        .create_context(display, config, None, &ctx_attribs)
         .map_err(|e| EglError::CreateContext(e))?;
 
-    egl_i.make_current(display, Some(surface), Some(surface), Some(context))
+    egl_i
+        .make_current(display, Some(surface), Some(surface), Some(context))
         .map_err(|e| EglError::MakeCurrent(e))?;
 
     Ok((context, surface))
@@ -266,7 +273,7 @@ fn try_init_surfaceless(
     Ok((display, ctx, surf))
 }
 
-pub fn init_egl(card_path: &str) -> Result<EglCtx, EglError> {
+pub fn init_egl(_card_path: &str) -> Result<EglCtx, EglError> {
     let egl_i = khronos_egl::Instance::new(khronos_egl::Static);
     let cext = client_exts(&egl_i);
     log::debug!("EGL client extensions: {}", cext);
@@ -451,15 +458,15 @@ pub(crate) fn import_current_capture_texture(
                 modifier,
                 mod_err
             );
-        let attrs_nomod = build_attrs(w, h, fourcc, &planes, None, false);
+            let attrs_nomod = build_attrs(w, h, fourcc, &planes, None, false);
             match unsafe {
-            egl.create_image(
-                display,
-                khronos_egl::Context::from_ptr(khronos_egl::NO_CONTEXT),
-                EGL_LINUX_DMA_BUF_EXT as u32,
-                khronos_egl::ClientBuffer::from_ptr(std::ptr::null_mut()),
-                &attrs_nomod,
-            )
+                egl.create_image(
+                    display,
+                    khronos_egl::Context::from_ptr(khronos_egl::NO_CONTEXT),
+                    EGL_LINUX_DMA_BUF_EXT as u32,
+                    khronos_egl::ClientBuffer::from_ptr(std::ptr::null_mut()),
+                    &attrs_nomod,
+                )
             } {
                 Ok(img) => img,
                 Err(nomod_err) => {

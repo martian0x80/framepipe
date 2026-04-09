@@ -2,8 +2,11 @@ use clap::Parser;
 use eyre::Result;
 
 mod app;
+mod capture;
+mod cursor;
 mod drm_kms;
 mod encode;
+mod portal;
 mod shared;
 mod wayland;
 

@@ -112,8 +112,9 @@ pub fn init_wayland(
         file_path.to_string_lossy()
     );
     // Start libinput tracker first so we can replay deltas after first absolute anchor.
-    let mouse_tracker = MouseTrackerLibinput::start_with_input_fds(file_path, recording, ring, input_fds)
-        .map_err(|_| WaylandError::ConnectionFailed)?;
+    let mouse_tracker =
+        MouseTrackerLibinput::start_with_input_fds(file_path, recording, ring, input_fds)
+            .map_err(|_| WaylandError::ConnectionFailed)?;
 
     let conn = Connection::connect_to_env().map_err(|_| WaylandError::ConnectionFailed)?;
     let (globals, mut event_queue) =

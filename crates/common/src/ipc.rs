@@ -4,11 +4,9 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 
 use nix::errno::Errno;
-use nix::sys::socket::{
-    ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg,
-};
-use serde::de::DeserializeOwned;
+use nix::sys::socket::{ControlMessage, ControlMessageOwned, MsgFlags, recvmsg, sendmsg};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 const IPC_MAX_PAYLOAD: usize = 64 * 1024;
 const IPC_MAX_FDS: usize = 256;

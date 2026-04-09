@@ -41,7 +41,9 @@ pub enum ProbeError {
     GetFramebufferInfo,
     #[error("Failed to convert buffer handle to PRIME fd")]
     BufferToPrimeFd,
-    #[error("Framebuffer has no exportable GEM handles (likely missing CAP_SYS_ADMIN/DRM master); privilege-sensitive fb export must stay in privd")]
+    #[error(
+        "Framebuffer has no exportable GEM handles (likely missing CAP_SYS_ADMIN/DRM master); privilege-sensitive fb export must stay in privd"
+    )]
     MissingFramebufferHandles,
     #[error("Unknown probe error")]
     Unknown,

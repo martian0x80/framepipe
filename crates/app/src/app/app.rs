@@ -1,34 +1,20 @@
 use eyre::Result;
 
-use crate::drm_kms::types::{CaptureOptions, CaptureOutput};
-
-use super::{
-    pipeline::{CapturePipeline, DrmEglPipeline},
-    signals::CaptureControl,
-};
+use super::signals::CaptureControl;
+use crate::capture::{capture, types::CaptureBackendKind};
+use crate::drm_kms::types::CaptureOptions;
 
 pub struct RecordingSession {
     options: CaptureOptions,
-    pipeline: Box<dyn CapturePipeline>,
+    backend: CaptureBackendKind,
 }
 
 impl RecordingSession {
-    pub fn new(options: CaptureOptions) -> Result<Self> {
-        Ok(Self {
-            options,
-            pipeline: Box::<DrmEglPipeline>::default(),
-        })
-    }
-
-    pub fn with_pipeline(options: CaptureOptions, pipeline: Box<dyn CapturePipeline>) -> Self {
-        Self { options, pipeline }
+    pub fn new(options: CaptureOptions, backend: CaptureBackendKind) -> Result<Self> {
+        Ok(Self { options, backend })
     }
 
     pub fn run(self, control: CaptureControl) -> Result<()> {
-        self.pipeline.run(self.options, control)
-    }
-
-    pub fn is_preview(&self) -> bool {
-        matches!(self.options.output, CaptureOutput::Preview)
+        capture::run_capture_session(self.options, control, self.backend).map_err(Into::into)
     }
 }

@@ -2,11 +2,9 @@ use std::path::PathBuf;
 
 use eyre::Result;
 
-use crate::{
-    drm_kms::{
-        probe,
-        types::{CaptureOptions, CaptureOutput},
-    },
+use crate::drm_kms::{
+    probe,
+    types::{CaptureOptions, CaptureOutput},
 };
 
 use super::cli::CaptureArgs;
