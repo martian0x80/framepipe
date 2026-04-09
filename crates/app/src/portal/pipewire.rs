@@ -1,7 +1,11 @@
 use std::{
     io::Cursor,
-    os::fd::{AsRawFd, OwnedFd},
-    sync::atomic::{AtomicBool, Ordering},
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
 };
 
 use ashpd::desktop::{
@@ -12,6 +16,7 @@ use khronos_egl as egl;
 use pipewire as pw;
 use pw::{properties::properties, spa};
 use spa::pod::Pod;
+use crate::{capture::types::CaptureFrame, shared::pipewire_frame_ring::PipeWireFrameRing};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -84,7 +89,15 @@ pub async fn screencast_session(
     egl_display: egl::Display,
 ) -> eyre::Result<()> {
     let remote = screencast().await?;
-    run_pipewire_stream(remote, max_frames, egl_i, egl_display)
+    run_pipewire_stream(
+        remote,
+        max_frames,
+        Some(egl_i),
+        Some(egl_display),
+        None,
+        None,
+        None,
+    )
 }
 
 fn fourcc(a: u8, b: u8, c: u8, d: u8) -> u32 {
@@ -165,11 +178,24 @@ fn query_modifiers_for_drm_format(
     out
 }
 
+fn serialize_object_to_bytes(object: spa::pod::Object) -> eyre::Result<Vec<u8>> {
+    let bytes = pw::spa::pod::serialize::PodSerializer::serialize(
+        Cursor::new(Vec::new()),
+        &pw::spa::pod::Value::Object(object),
+    )?
+    .0
+    .into_inner();
+    Ok(bytes)
+}
+
 fn run_pipewire_stream(
     remote: PortalPipeWireRemote,
     max_frames: u32,
-    egl_i: &egl::Instance<egl::Static>,
-    egl_display: egl::Display,
+    egl_i: Option<&egl::Instance<egl::Static>>,
+    egl_display: Option<egl::Display>,
+    prebuilt_format_bytes: Option<Vec<Vec<u8>>>,
+    frame_ring: Option<Arc<PipeWireFrameRing>>,
+    stop: Option<Arc<AtomicBool>>,
 ) -> eyre::Result<()> {
     pw::init();
 
@@ -188,6 +214,8 @@ fn run_pipewire_stream(
     let params_sent = AtomicBool::new(false);
     let should_stop = std::rc::Rc::new(AtomicBool::new(false));
     let frame_count = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+    let frame_id = std::rc::Rc::new(std::cell::Cell::new(1_u32));
+    let frame_fmt = std::rc::Rc::new(std::cell::Cell::new(None::<FrameFormat>));
     let mainloop_for_cb = mainloop.clone();
 
     let _listener = stream
@@ -204,6 +232,7 @@ fn run_pipewire_stream(
             }
         })
         .param_changed({
+            let frame_fmt = std::rc::Rc::clone(&frame_fmt);
             move |stream, user_data, id, param| {
                 let Some(param) = param else {
                     return;
@@ -241,6 +270,14 @@ fn run_pipewire_stream(
                     user_data.framerate().denom,
                     user_data.modifier(),
                 );
+                if let Some(fourcc) = drm_fourcc_for_spa_format(user_data.format()) {
+                    frame_fmt.set(Some(FrameFormat {
+                        width: user_data.size().width as i32,
+                        height: user_data.size().height as i32,
+                        fourcc,
+                        modifier: Some(user_data.modifier()),
+                    }));
+                }
 
                 if params_sent.swap(true, Ordering::AcqRel) {
                     return;
@@ -329,7 +366,16 @@ fn run_pipewire_stream(
                 }
             }
         })
-        .process(move |stream, _| unsafe {
+        .process({
+            let frame_ring = frame_ring.clone();
+            let stop = stop.clone();
+            let frame_id = std::rc::Rc::clone(&frame_id);
+            let frame_fmt = std::rc::Rc::clone(&frame_fmt);
+            move |stream, _| unsafe {
+            if stop.as_ref().is_some_and(|s| s.load(Ordering::Acquire)) {
+                mainloop_for_cb.quit();
+                return;
+            }
             let raw = stream.dequeue_raw_buffer();
             if raw.is_null() {
                 return;
@@ -342,6 +388,9 @@ fn run_pipewire_stream(
             }
 
             let n_datas = (*spa_buf).n_datas as usize;
+            let mut plane_fds = Vec::new();
+            let mut offsets = Vec::new();
+            let mut strides = Vec::new();
             for i in 0..n_datas {
                 let d = &*((*spa_buf).datas.add(i));
                 if d.type_ == spa::sys::SPA_DATA_DmaBuf {
@@ -358,6 +407,23 @@ fn run_pipewire_stream(
                         size,
                         stride
                     );
+                    if d.fd >= 0 {
+                        let Ok(raw_fd) = i32::try_from(d.fd) else {
+                            continue;
+                        };
+                        if let Ok(fd) = dup_fd_raw(raw_fd) {
+                            plane_fds.push(fd);
+                            offsets.push(offset);
+                            strides.push(stride.max(0) as u32);
+                            log::trace!(
+                                "pipewire backend dmabuf plane {} duplicated: fd={} offset={} stride={}",
+                                i,
+                                d.fd,
+                                offset,
+                                stride
+                            );
+                        }
+                    }
                 }
             }
 
@@ -365,22 +431,145 @@ fn run_pipewire_stream(
             frame_count.set(next);
             stream.queue_raw_buffer(raw);
 
+            if let (Some(ring), Some(fmt)) = (frame_ring.as_ref(), frame_fmt.get()) {
+                if !plane_fds.is_empty() {
+                    let id = frame_id.get();
+                    frame_id.set(id.saturating_add(1));
+                    ring.push_overwrite(CaptureFrame {
+                        fb_id: id,
+                        width: fmt.width,
+                        height: fmt.height,
+                        fourcc: fmt.fourcc,
+                        modifier: fmt.modifier,
+                        plane_fds,
+                        offsets,
+                        strides,
+                    });
+                }
+            }
+
             if next >= max_frames {
                 mainloop_for_cb.quit();
             }
+        }
         })
         .register()?;
 
-    fn serialize_object_to_bytes(object: spa::pod::Object) -> eyre::Result<Vec<u8>> {
-        let bytes = pw::spa::pod::serialize::PodSerializer::serialize(
-            Cursor::new(Vec::new()),
-            &pw::spa::pod::Value::Object(object),
-        )?
-        .0
-        .into_inner();
-        Ok(bytes)
+    let format_bytes = if let Some(bytes) = prebuilt_format_bytes {
+        bytes
+    } else {
+        let egl_i = egl_i.ok_or_else(|| eyre::eyre!("missing EGL instance for pipewire stream"))?;
+        let egl_display = egl_display.ok_or_else(|| eyre::eyre!("missing EGL display for pipewire stream"))?;
+        build_pipewire_enum_format_bytes(egl_i, egl_display)?
+    };
+
+    let mut params = format_bytes
+        .iter()
+        .filter_map(|b| Pod::from_bytes(b))
+        .collect::<Vec<_>>();
+    if params.is_empty() {
+        return Err(eyre::eyre!("no pipewire enum format params built"));
     }
 
+    stream.connect(
+        spa::utils::Direction::Input,
+        Some(remote.node_id),
+        pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
+        &mut params[..],
+    )?;
+    stream.set_active(true)?;
+
+    log::info!(
+        "pipewire stream started: node={} max_frames={}",
+        remote.node_id,
+        max_frames
+    );
+
+    mainloop.run();
+
+    if should_stop.load(Ordering::Acquire) {
+        return Err(eyre::eyre!(
+            "pipewire stream ended with error before completion"
+        ));
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct FrameFormat {
+    width: i32,
+    height: i32,
+    fourcc: u32,
+    modifier: Option<u64>,
+}
+
+pub struct PipeWireCaptureProducer {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl PipeWireCaptureProducer {
+    pub fn stop(mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for PipeWireCaptureProducer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+pub fn start_capture_producer(
+    ring: Arc<PipeWireFrameRing>,
+    format_bytes: Vec<Vec<u8>>,
+) -> Result<PipeWireCaptureProducer, String> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_thread = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("pipewire producer failed to create tokio runtime: {e}");
+                return;
+            }
+        };
+        let remote = match rt.block_on(screencast()) {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("pipewire producer failed to start screencast portal: {e}");
+                return;
+            }
+        };
+        if let Err(e) = run_pipewire_stream(
+            remote,
+            u32::MAX,
+            None,
+            None,
+            Some(format_bytes),
+            Some(ring),
+            Some(stop_thread),
+        ) {
+            log::error!("pipewire producer stream error: {e}");
+        }
+    });
+    Ok(PipeWireCaptureProducer {
+        stop,
+        handle: Some(handle),
+    })
+}
+
+pub fn build_pipewire_enum_format_bytes(
+    egl_i: &egl::Instance<egl::Static>,
+    egl_display: egl::Display,
+) -> eyre::Result<Vec<Vec<u8>>> {
     let build_enum_format = |format: pw::spa::param::video::VideoFormat,
                              modifiers: Option<&[i64]>|
      -> spa::pod::Object {
@@ -487,36 +676,13 @@ fn run_pipewire_stream(
         ))?);
         format_bytes.push(serialize_object_to_bytes(build_enum_format(format, None))?);
     }
+    Ok(format_bytes)
+}
 
-    let mut params = format_bytes
-        .iter()
-        .filter_map(|b| Pod::from_bytes(b))
-        .collect::<Vec<_>>();
-    if params.is_empty() {
-        return Err(eyre::eyre!("no pipewire enum format params built"));
+fn dup_fd_raw(raw_fd: i32) -> std::io::Result<OwnedFd> {
+    let dup_fd = unsafe { libc::fcntl(raw_fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if dup_fd < 0 {
+        return Err(std::io::Error::last_os_error());
     }
-
-    stream.connect(
-        spa::utils::Direction::Input,
-        Some(remote.node_id),
-        pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
-        &mut params[..],
-    )?;
-    stream.set_active(true)?;
-
-    log::info!(
-        "pipewire stream started: node={} max_frames={}",
-        remote.node_id,
-        max_frames
-    );
-
-    mainloop.run();
-
-    if should_stop.load(Ordering::Acquire) {
-        return Err(eyre::eyre!(
-            "pipewire stream ended with error before completion"
-        ));
-    }
-
-    Ok(())
+    Ok(unsafe { OwnedFd::from_raw_fd(dup_fd) })
 }

@@ -41,7 +41,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 let egl_ctx = crate::drm_kms::egl_context::init_egl("").unwrap();
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
-                    crate::portal::dbus::screencast_session(1000, &egl_ctx.egl, egl_ctx.display)
+                    crate::portal::pipewire::screencast_session(1000, &egl_ctx.egl, egl_ctx.display)
                         .await
                         .unwrap();
                     println!("portal dmabuf/cursor poc done");

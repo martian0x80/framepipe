@@ -22,3 +22,14 @@ impl std::fmt::Display for CaptureBackendKind {
         }
     }
 }
+
+pub struct CaptureFrame {
+    pub fb_id: u32,
+    pub width: i32,
+    pub height: i32,
+    pub fourcc: u32,
+    pub modifier: Option<u64>,
+    pub plane_fds: Vec<std::os::fd::OwnedFd>,
+    pub offsets: Vec<u32>,
+    pub strides: Vec<u32>,
+}

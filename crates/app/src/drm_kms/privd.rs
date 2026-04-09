@@ -109,6 +109,8 @@ impl PrivdSession {
     }
 }
 
+// TODO: split into separate method for acquiring input fds, since not all capture sessions will need drm (portal)
+
 pub fn acquire_device_fds(
     card_path: &str,
     include_input_fds: bool,

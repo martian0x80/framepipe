@@ -1,5 +1,6 @@
 use std::os::fd::AsRawFd;
 
+use crate::capture::types::CaptureFrame;
 use crate::drm_kms::{
     privd::PrivdSession,
     probe::ProbeSession,
@@ -416,16 +417,45 @@ pub(crate) fn import_current_capture_texture(
     let exported = privd_session
         .export_framebuffer(fb_id)
         .map_err(|e| EglError::Pipeline(format!("privd framebuffer export failed: {e}")))?;
-    let frame = exported.info;
-    let plane_fds = exported.fds;
-    let (w, h) = (frame.width, frame.height);
+    let frame_info = exported.info;
+    let capture_frame = CaptureFrame {
+        fb_id: frame_info.fb_id,
+        width: frame_info.width,
+        height: frame_info.height,
+        fourcc: frame_info.fourcc,
+        modifier: frame_info.modifier,
+        plane_fds: exported.fds,
+        offsets: frame_info
+            .offsets
+            .iter()
+            .map(|v| (*v).max(0) as u32)
+            .collect(),
+        strides: frame_info
+            .strides
+            .iter()
+            .map(|v| (*v).max(0) as u32)
+            .collect(),
+    };
+
+    import_capture_frame_texture(capture_frame, egl, display)
+}
+
+pub(crate) fn import_capture_frame_texture(
+    frame: CaptureFrame,
+    egl: &khronos_egl::Instance<khronos_egl::Static>,
+    display: khronos_egl::Display,
+) -> Result<(u32, i32, i32, u32), EglError> {
+    let fb_id = frame.fb_id;
+    let w = frame.width;
+    let h = frame.height;
     let fourcc = frame.fourcc;
     let modifier = frame.modifier;
+
     let mut planes = Vec::new();
-    for i in 0..plane_fds.len().min(4) {
-        let fd = plane_fds[i].as_raw_fd();
-        let offset = *frame.offsets.get(i).unwrap_or(&0_i32) as u32;
-        let pitch = *frame.strides.get(i).unwrap_or(&0_i32) as u32;
+    for i in 0..frame.plane_fds.len().min(4) {
+        let fd = frame.plane_fds[i].as_raw_fd();
+        let offset = *frame.offsets.get(i).unwrap_or(&0_u32);
+        let pitch = *frame.strides.get(i).unwrap_or(&0_u32);
         planes.push((i, fd, offset, pitch));
     }
     log::trace!(

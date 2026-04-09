@@ -2,19 +2,17 @@ use glow::{HasContext, NativeTexture};
 use std::{
     fs,
     num::NonZero,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     sync::{Arc, atomic::Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::app::signals::CaptureControl;
+use crate::capture::backend::CaptureBackend;
 use crate::cursor::cursor::*;
 use crate::drm_kms::{
     debug, egl_dmabuf_export, gpu_pipeline,
     gpu_pipeline::create_default_cursor_texture,
-    privd,
-    probe::ProbeSession,
     types::{CaptureOptions, CaptureOutput},
 };
 use crate::shared::mouse_ring::RingBuffer;
@@ -22,12 +20,13 @@ use crate::wayland::layer::{TrackingControl, init_wayland};
 use crate::wayland::types::MouseTrackRecordingInfo;
 
 use crate::drm_kms::egl_context::{
-    EglCtx, EglError, delete_gl_texture, import_current_capture_texture, init_egl,
+    EglCtx, EglError, delete_gl_texture, import_capture_frame_texture, init_egl,
 };
 
 pub fn run_capture_session(
     options: CaptureOptions,
     control: CaptureControl,
+    backend: &mut dyn CaptureBackend,
 ) -> Result<(), EglError> {
     log::info!(
         "capture session start: card={} connector={:?} fps={}",
@@ -36,15 +35,11 @@ pub fn run_capture_session(
         options.fps
     );
     let use_mouse_tracking = options.mouse_tracking || options.cursor_composition;
-    let mut privd_session = privd::acquire_device_fds(&options.card_path, use_mouse_tracking)
-        .map_err(|e| EglError::Pipeline(format!("failed to acquire device fds from privd: {e}")))?;
     let input_fds_for_tracker = if use_mouse_tracking {
-        Some(std::mem::take(&mut privd_session.input_fds))
+        backend.take_input_fds()
     } else {
         None
     };
-    let drm_fd = dup_fd(privd_session.drm_fd.as_raw_fd())
-        .map_err(|e| EglError::Pipeline(format!("failed to dup drm fd from privd: {e}")))?;
 
     let mouse_ring: Option<Arc<RingBuffer>> = if use_mouse_tracking {
         Some(Arc::new(RingBuffer::new(512)))
@@ -113,23 +108,17 @@ pub fn run_capture_session(
         e
     })?;
     log::debug!("EGL context initialized");
-    log::debug!("creating probe session from privd drm fd");
-    let mut probe_session = ProbeSession::new_with_card(
-        crate::drm_kms::types::Card::from_owned_fd(drm_fd),
-        options.connector.clone(),
-        options.allow_fallback_connector,
-    )
-    .map_err(|e| {
-        log::error!("probe session creation failed: {}", e);
-        EglError::Probe(e)
+    backend.on_egl_ready(&egl, display)?;
+    let first_frame = backend.next_frame().map_err(|e| {
+        log::error!("initial backend frame acquisition failed: {}", e);
+        e
     })?;
-    log::debug!("probe session ready, importing first texture");
+    log::debug!("backend returned first frame, importing texture");
     let (texture, source_w, source_h, mut prev_fb_id) =
-        import_current_capture_texture(&mut probe_session, &mut privd_session, &egl, display)
-            .map_err(|e| {
-                log::error!("initial frame import failed: {}", e);
-                e
-            })?;
+        import_capture_frame_texture(first_frame, &egl, display).map_err(|e| {
+            log::error!("initial frame import failed: {}", e);
+            e
+        })?;
     let output_w = options
         .output_width
         .map(|v| v.max(1) as i32)
@@ -320,12 +309,10 @@ pub fn run_capture_session(
             continue;
         }
 
-        let (frame_texture, frame_w, frame_h, fb_id) = match import_current_capture_texture(
-            &mut probe_session,
-            &mut privd_session,
-            &egl,
-            display,
-        ) {
+        let (frame_texture, frame_w, frame_h, fb_id) = match backend
+            .next_frame()
+            .and_then(|frame| import_capture_frame_texture(frame, &egl, display))
+        {
             Ok(v) => v,
             Err(e) => {
                 if control.stop_requested.load(Ordering::Relaxed) {
@@ -576,12 +563,4 @@ pub fn run_capture_session(
     }
 
     Ok(())
-}
-
-fn dup_fd(raw_fd: i32) -> std::io::Result<OwnedFd> {
-    let dup_fd = unsafe { libc::fcntl(raw_fd, libc::F_DUPFD_CLOEXEC, 0) };
-    if dup_fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(unsafe { OwnedFd::from_raw_fd(dup_fd) })
 }
