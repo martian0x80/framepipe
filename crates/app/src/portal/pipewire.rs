@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     cell::RefCell,
     io::Cursor,
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
@@ -46,14 +45,12 @@ pub struct PortalPipeWireRemote {
 }
 
 const DRM_FORMAT_MOD_INVALID: i64 = 0x00ff_ffff_ffff_ffff;
-const DRM_FORMAT_MOD_LINEAR: i64 = 0;
 
 #[derive(Clone)]
 pub(crate) struct FormatOffer {
     format: pw::spa::param::video::VideoFormat,
     fourcc: u32,
     modifiers: Vec<i64>,
-    external_only_modifiers: HashSet<i64>,
 }
 
 pub async fn screencast() -> eyre::Result<PortalPipeWireRemote> {
@@ -132,7 +129,7 @@ fn query_modifiers_for_drm_format(
     egl_i: &egl::Instance<egl::Static>,
     display: egl::Display,
     drm_format: u32,
-) -> (Vec<i64>, HashSet<i64>) {
+) -> Vec<i64> {
     type EglQueryDmaBufModifiersExt = unsafe extern "C" fn(
         dpy: egl::EGLDisplay,
         format: i32,
@@ -143,7 +140,7 @@ fn query_modifiers_for_drm_format(
     ) -> egl::Boolean;
 
     let Some(sym) = egl_i.get_proc_address("eglQueryDmaBufModifiersEXT") else {
-        return (vec![DRM_FORMAT_MOD_INVALID], HashSet::new());
+        return vec![DRM_FORMAT_MOD_INVALID];
     };
     let query: EglQueryDmaBufModifiersExt = unsafe { std::mem::transmute(sym) };
 
@@ -159,55 +156,38 @@ fn query_modifiers_for_drm_format(
         )
     };
     if ok == egl::FALSE || n <= 0 {
-        return (vec![DRM_FORMAT_MOD_INVALID], HashSet::new());
+        return vec![DRM_FORMAT_MOD_INVALID];
     }
 
     let mut modifiers = vec![0_u64; n as usize];
-    let mut external_only = vec![egl::FALSE; n as usize];
     let ok = unsafe {
         query(
             display.as_ptr(),
             drm_format as i32,
             n,
             modifiers.as_mut_ptr(),
-            external_only.as_mut_ptr(),
+            std::ptr::null_mut(),
             &mut n,
         )
     };
     if ok == egl::FALSE || n <= 0 {
-        return (vec![DRM_FORMAT_MOD_INVALID], HashSet::new());
+        return vec![DRM_FORMAT_MOD_INVALID];
     }
 
     modifiers.truncate(n as usize);
     let mut out = Vec::with_capacity(modifiers.len());
-    let mut external_only_modifiers = HashSet::new();
-    for (idx, m) in modifiers.iter().enumerate() {
+    for m in &modifiers {
         let v = *m as i64;
         if v == DRM_FORMAT_MOD_INVALID {
             continue;
         }
         out.push(v);
-        if external_only
-            .get(idx)
-            .copied()
-            .unwrap_or(egl::FALSE)
-            != egl::FALSE
-        {
-            external_only_modifiers.insert(v);
-        }
-    }
-    // Prefer non-linear modifiers for direct scanout/compositor paths.
-    // If any non-linear modifier exists, do not advertise LINEAR as a fallback.
-    let has_non_linear = out.iter().any(|m| *m != DRM_FORMAT_MOD_LINEAR);
-    if has_non_linear {
-        out.retain(|m| *m != DRM_FORMAT_MOD_LINEAR);
-        external_only_modifiers.remove(&DRM_FORMAT_MOD_LINEAR);
     }
 
-    if out.is_empty() {
-        out.push(DRM_FORMAT_MOD_LINEAR);
+    if !out.contains(&DRM_FORMAT_MOD_INVALID) {
+        out.push(DRM_FORMAT_MOD_INVALID);
     }
-    (out, external_only_modifiers)
+    out
 }
 
 fn serialize_object_to_bytes(object: spa::pod::Object) -> eyre::Result<Vec<u8>> {
@@ -238,13 +218,11 @@ fn build_pipewire_format_offers(
         let Some(fourcc) = drm_fourcc_for_spa_format(format) else {
             continue;
         };
-        let (modifiers, external_only_modifiers) =
-            query_modifiers_for_drm_format(egl_i, egl_display, fourcc);
+        let modifiers = query_modifiers_for_drm_format(egl_i, egl_display, fourcc);
         offers.push(FormatOffer {
             format,
             fourcc,
             modifiers,
-            external_only_modifiers,
         });
     }
     offers
@@ -321,7 +299,11 @@ fn build_enum_format_object(
                 },
             ))),
         );
-        modifier_prop.flags = spa::pod::PropertyFlags::MANDATORY;
+        modifier_prop.flags =
+            spa::pod::PropertyFlags::MANDATORY
+                | spa::pod::PropertyFlags::from_bits_retain(
+                    spa::sys::SPA_POD_PROP_FLAG_DONT_FIXATE,
+                );
         properties.push(modifier_prop);
     }
 
@@ -395,7 +377,6 @@ fn run_pipewire_stream(
         })
         .param_changed({
             let frame_fmt = std::rc::Rc::clone(&frame_fmt);
-            let offers_state = Rc::clone(&offers_state);
             move |stream, user_data, id, param| {
                 let Some(param) = param else {
                     return;
@@ -434,18 +415,11 @@ fn run_pipewire_stream(
                     user_data.modifier(),
                 );
                 if let Some(fourcc) = drm_fourcc_for_spa_format(user_data.format()) {
-                    let use_external_texture = offers_state
-                        .borrow()
-                        .iter()
-                        .find(|offer| offer.fourcc == fourcc)
-                        .map(|offer| offer.external_only_modifiers.contains(&(user_data.modifier() as i64)))
-                        .unwrap_or(false);
                     frame_fmt.set(Some(FrameFormat {
                         width: user_data.size().width as i32,
                         height: user_data.size().height as i32,
                         fourcc,
                         modifier: Some(user_data.modifier()),
-                        use_external_texture,
                     }));
                 }
 
@@ -624,7 +598,6 @@ fn run_pipewire_stream(
                         height: fmt.height,
                         fourcc: fmt.fourcc,
                         modifier: fmt.modifier,
-                        use_external_texture: fmt.use_external_texture,
                         plane_fds,
                         offsets,
                         strides,
@@ -680,7 +653,6 @@ struct FrameFormat {
     height: i32,
     fourcc: u32,
     modifier: Option<u64>,
-    use_external_texture: bool,
 }
 
 pub struct PipeWireCaptureProducer {

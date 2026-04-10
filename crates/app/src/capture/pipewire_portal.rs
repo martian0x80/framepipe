@@ -151,7 +151,6 @@ fn dup_capture_frame(frame: &CaptureFrame) -> Result<CaptureFrame, EglError> {
         height: frame.height,
         fourcc: frame.fourcc,
         modifier: frame.modifier,
-        use_external_texture: frame.use_external_texture,
         plane_fds: fds,
         offsets: frame.offsets.clone(),
         strides: frame.strides.clone(),

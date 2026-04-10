@@ -67,6 +67,7 @@ impl CursorState {
     }
 }
 
+// todo: update the default texture
 pub fn create_default_cursor_texture(gl: &glow::Context) -> Result<glow::NativeTexture, String> {
     let size = 24i32;
     let mut pixels: Vec<u8> = vec![0u8; (size * size * 4) as usize];
@@ -163,7 +164,7 @@ impl GpuPipeline {
                     .unwrap_or(std::ptr::null())
             })
         };
-        log::debug!("GL Version: {}", unsafe {
+        log::trace!("GL Version: {}", unsafe {
             gl.get_parameter_string(glow::VERSION)
         });
 
@@ -270,16 +271,16 @@ impl GpuPipeline {
             let prog_external = match create_program(&gl, vs, fs_external) {
                 Ok(p) => Some(p),
                 Err(e) => {
-                    log::debug!("External texture shader unavailable: {}", e);
+                    log::trace!("External texture shader unavailable: {}", e);
                     None
                 }
             };
-            log::debug!("Shader program compiled and linked successfully");
+            log::trace!("Shader program compiled and linked successfully");
             let vao = gl.create_vertex_array().map_err(|e| e.to_string())?;
             let vbo = gl.create_buffer().map_err(|e| e.to_string())?;
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-            log::debug!("VAO and VBO created and bound");
+            log::trace!("VAO and VBO created and bound");
 
             let quad: [f32; 24] = [
                 -1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, -1.0, -1.0, 0.0,
@@ -294,7 +295,7 @@ impl GpuPipeline {
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 16, 0);
             gl.enable_vertex_attrib_array(1);
             gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, 16, 8);
-            log::debug!("Quad vertex data uploaded and attribute pointers set");
+            log::trace!("Quad vertex data uploaded and attribute pointers set");
 
             let out_tex = gl.create_texture().map_err(|e| e.to_string())?;
             gl.bind_texture(glow::TEXTURE_2D, Some(out_tex));
@@ -329,7 +330,7 @@ impl GpuPipeline {
                 glow::TEXTURE_WRAP_T,
                 glow::CLAMP_TO_EDGE as i32,
             );
-            log::debug!("Output texture created and configured");
+            log::trace!("Output texture created and configured");
 
             let fbo = gl.create_framebuffer().map_err(|e| e.to_string())?;
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
@@ -343,7 +344,7 @@ impl GpuPipeline {
             if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
                 return Err("FBO incomplete".into());
             }
-            log::debug!("Framebuffer created and output texture attached successfully");
+            log::trace!("Framebuffer created and output texture attached successfully");
 
             Ok(Self {
                 gl,
