@@ -141,6 +141,7 @@ pub fn create_default_cursor_texture(gl: &glow::Context) -> Result<glow::NativeT
 pub struct GpuPipeline {
     pub gl: glow::Context,
     prog: glow::NativeProgram,
+    prog_external: Option<glow::NativeProgram>,
     vao: glow::NativeVertexArray,
     vbo: glow::NativeBuffer,
     fbo: glow::NativeFramebuffer,
@@ -218,8 +219,61 @@ impl GpuPipeline {
                 }
                 o = base;
             }"#;
+        let fs_external = r#"#version 300 es
+            #extension GL_OES_EGL_image_external_essl3 : require
+            precision mediump float;
+            in vec2 v_uv;
+            uniform samplerExternalOES u_src;
+            uniform sampler2D u_cursor;
+            uniform int u_cursor_tap_count;
+            uniform vec3 u_cursor_taps[8]; // x,y,alpha in output pixel space
+            uniform vec2 u_cursor_size_px; // w,h
+            uniform vec2 u_cursor_dir;
+            uniform float u_cursor_stretch;
+            uniform float u_cursor_squash;
+            uniform vec2 u_out_size;
+            out vec4 o;
+
+            void main() {
+                vec2 uv = v_uv;
+                vec4 base = texture(u_src, uv);
+                vec2 p = uv * u_out_size; // output pixel space
+
+                for (int i = 0; i < 8; i++) {
+                    if (i >= u_cursor_tap_count) {
+                        break;
+                    }
+                    vec2 cmin = u_cursor_taps[i].xy;
+                    vec2 cmax = cmin + u_cursor_size_px;
+                    if (p.x >= cmin.x && p.y >= cmin.y && p.x < cmax.x && p.y < cmax.y) {
+                        vec2 center = cmin + 0.5 * u_cursor_size_px;
+                        vec2 local = p - center;
+                        vec2 dir = normalize(u_cursor_dir);
+                        vec2 perp = vec2(-dir.y, dir.x);
+                        float a = dot(local, dir);
+                        float b = dot(local, perp);
+                        float stretch = max(u_cursor_stretch, 0.001);
+                        float squash = max(u_cursor_squash, 0.001);
+                        vec2 deformed = dir * (a / stretch) + perp * (b / squash);
+                        vec2 sample_p = center + deformed;
+                        vec2 cuv = (sample_p - cmin) / u_cursor_size_px;
+                        vec4 c = texture(u_cursor, cuv);
+                        float alpha = clamp(c.a * u_cursor_taps[i].z, 0.0, 1.0);
+                        base.rgb = c.rgb * alpha + base.rgb * (1.0 - alpha);
+                        base.a = 1.0;
+                    }
+                }
+                o = base;
+            }"#;
         unsafe {
             let prog = create_program(&gl, vs, fs)?;
+            let prog_external = match create_program(&gl, vs, fs_external) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    log::debug!("External texture shader unavailable: {}", e);
+                    None
+                }
+            };
             log::debug!("Shader program compiled and linked successfully");
             let vao = gl.create_vertex_array().map_err(|e| e.to_string())?;
             let vbo = gl.create_buffer().map_err(|e| e.to_string())?;
@@ -294,6 +348,7 @@ impl GpuPipeline {
             Ok(Self {
                 gl,
                 prog,
+                prog_external,
                 vao,
                 vbo,
                 fbo,
@@ -310,6 +365,7 @@ impl GpuPipeline {
     pub unsafe fn render_with_cursor(
         &self,
         src_tex: glow::NativeTexture,
+        use_external_texture: bool,
         cursor: &CursorState,
     ) -> Result<glow::NativeFence, String> {
         unsafe {
@@ -321,13 +377,26 @@ impl GpuPipeline {
                 self.out_w,
                 self.out_h
             );
-            self.gl.use_program(Some(self.prog));
+            const GL_TEXTURE_2D: u32 = 0x0DE1;
+            const GL_TEXTURE_EXTERNAL_OES: u32 = 0x8D65;
+            let program = if use_external_texture {
+                self.prog_external
+                    .ok_or_else(|| "external texture shader not available".to_string())?
+            } else {
+                self.prog
+            };
+            self.gl.use_program(Some(program));
             log::trace!("Shader program in use for rendering");
 
             self.gl.active_texture(glow::TEXTURE0);
-            self.gl.bind_texture(glow::TEXTURE_2D, Some(src_tex));
+            let src_target = if use_external_texture {
+                GL_TEXTURE_EXTERNAL_OES
+            } else {
+                GL_TEXTURE_2D
+            };
+            self.gl.bind_texture(src_target, Some(src_tex));
             self.gl
-                .uniform_1_i32(self.gl.get_uniform_location(self.prog, "u_src").as_ref(), 0);
+                .uniform_1_i32(self.gl.get_uniform_location(program, "u_src").as_ref(), 0);
             log::trace!("Source texture bound and uniform set");
 
             let tap_count = if cursor.tex.is_some() {
@@ -337,40 +406,40 @@ impl GpuPipeline {
             };
             self.gl.uniform_1_i32(
                 self.gl
-                    .get_uniform_location(self.prog, "u_cursor_tap_count")
+                    .get_uniform_location(program, "u_cursor_tap_count")
                     .as_ref(),
                 tap_count,
             );
             self.gl.uniform_2_f32(
                 self.gl
-                    .get_uniform_location(self.prog, "u_out_size")
+                    .get_uniform_location(program, "u_out_size")
                     .as_ref(),
                 self.out_w as f32,
                 self.out_h as f32,
             );
             self.gl.uniform_2_f32(
                 self.gl
-                    .get_uniform_location(self.prog, "u_cursor_size_px")
+                    .get_uniform_location(program, "u_cursor_size_px")
                     .as_ref(),
                 cursor.w,
                 cursor.h,
             );
             self.gl.uniform_2_f32(
                 self.gl
-                    .get_uniform_location(self.prog, "u_cursor_dir")
+                    .get_uniform_location(program, "u_cursor_dir")
                     .as_ref(),
                 cursor.dir_x,
                 cursor.dir_y,
             );
             self.gl.uniform_1_f32(
                 self.gl
-                    .get_uniform_location(self.prog, "u_cursor_stretch")
+                    .get_uniform_location(program, "u_cursor_stretch")
                     .as_ref(),
                 cursor.stretch,
             );
             self.gl.uniform_1_f32(
                 self.gl
-                    .get_uniform_location(self.prog, "u_cursor_squash")
+                    .get_uniform_location(program, "u_cursor_squash")
                     .as_ref(),
                 cursor.squash,
             );
@@ -384,7 +453,7 @@ impl GpuPipeline {
             }
             self.gl.uniform_3_f32_slice(
                 self.gl
-                    .get_uniform_location(self.prog, "u_cursor_taps")
+                    .get_uniform_location(program, "u_cursor_taps")
                     .as_ref(),
                 &taps_flat,
             );
@@ -393,7 +462,7 @@ impl GpuPipeline {
                 self.gl.active_texture(glow::TEXTURE1);
                 self.gl.bind_texture(glow::TEXTURE_2D, Some(ctex));
                 self.gl.uniform_1_i32(
-                    self.gl.get_uniform_location(self.prog, "u_cursor").as_ref(),
+                    self.gl.get_uniform_location(program, "u_cursor").as_ref(),
                     1,
                 );
             }

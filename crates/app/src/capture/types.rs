@@ -29,6 +29,7 @@ pub struct CaptureFrame {
     pub height: i32,
     pub fourcc: u32,
     pub modifier: Option<u64>,
+    pub use_external_texture: bool,
     pub plane_fds: Vec<std::os::fd::OwnedFd>,
     pub offsets: Vec<u32>,
     pub strides: Vec<u32>,

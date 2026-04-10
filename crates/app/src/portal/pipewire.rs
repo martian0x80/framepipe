@@ -1,6 +1,9 @@
 use std::{
+    collections::HashSet,
+    cell::RefCell,
     io::Cursor,
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -43,6 +46,15 @@ pub struct PortalPipeWireRemote {
 }
 
 const DRM_FORMAT_MOD_INVALID: i64 = 0x00ff_ffff_ffff_ffff;
+const DRM_FORMAT_MOD_LINEAR: i64 = 0;
+
+#[derive(Clone)]
+pub(crate) struct FormatOffer {
+    format: pw::spa::param::video::VideoFormat,
+    fourcc: u32,
+    modifiers: Vec<i64>,
+    external_only_modifiers: HashSet<i64>,
+}
 
 pub async fn screencast() -> eyre::Result<PortalPipeWireRemote> {
     let proxy = Screencast::new().await.map_err(Error::Proxy)?;
@@ -120,7 +132,7 @@ fn query_modifiers_for_drm_format(
     egl_i: &egl::Instance<egl::Static>,
     display: egl::Display,
     drm_format: u32,
-) -> Vec<i64> {
+) -> (Vec<i64>, HashSet<i64>) {
     type EglQueryDmaBufModifiersExt = unsafe extern "C" fn(
         dpy: egl::EGLDisplay,
         format: i32,
@@ -131,7 +143,7 @@ fn query_modifiers_for_drm_format(
     ) -> egl::Boolean;
 
     let Some(sym) = egl_i.get_proc_address("eglQueryDmaBufModifiersEXT") else {
-        return vec![DRM_FORMAT_MOD_INVALID];
+        return (vec![DRM_FORMAT_MOD_INVALID], HashSet::new());
     };
     let query: EglQueryDmaBufModifiersExt = unsafe { std::mem::transmute(sym) };
 
@@ -147,7 +159,7 @@ fn query_modifiers_for_drm_format(
         )
     };
     if ok == egl::FALSE || n <= 0 {
-        return vec![DRM_FORMAT_MOD_INVALID];
+        return (vec![DRM_FORMAT_MOD_INVALID], HashSet::new());
     }
 
     let mut modifiers = vec![0_u64; n as usize];
@@ -163,19 +175,39 @@ fn query_modifiers_for_drm_format(
         )
     };
     if ok == egl::FALSE || n <= 0 {
-        return vec![DRM_FORMAT_MOD_INVALID];
+        return (vec![DRM_FORMAT_MOD_INVALID], HashSet::new());
     }
 
     modifiers.truncate(n as usize);
-    let mut out = Vec::with_capacity(modifiers.len() + 1);
-    for m in modifiers {
-        let v = m as i64;
-        if v != DRM_FORMAT_MOD_INVALID {
-            out.push(v);
+    let mut out = Vec::with_capacity(modifiers.len());
+    let mut external_only_modifiers = HashSet::new();
+    for (idx, m) in modifiers.iter().enumerate() {
+        let v = *m as i64;
+        if v == DRM_FORMAT_MOD_INVALID {
+            continue;
+        }
+        out.push(v);
+        if external_only
+            .get(idx)
+            .copied()
+            .unwrap_or(egl::FALSE)
+            != egl::FALSE
+        {
+            external_only_modifiers.insert(v);
         }
     }
-    out.insert(0, DRM_FORMAT_MOD_INVALID);
-    out
+    // Prefer non-linear modifiers for direct scanout/compositor paths.
+    // If any non-linear modifier exists, do not advertise LINEAR as a fallback.
+    let has_non_linear = out.iter().any(|m| *m != DRM_FORMAT_MOD_LINEAR);
+    if has_non_linear {
+        out.retain(|m| *m != DRM_FORMAT_MOD_LINEAR);
+        external_only_modifiers.remove(&DRM_FORMAT_MOD_LINEAR);
+    }
+
+    if out.is_empty() {
+        out.push(DRM_FORMAT_MOD_LINEAR);
+    }
+    (out, external_only_modifiers)
 }
 
 fn serialize_object_to_bytes(object: spa::pod::Object) -> eyre::Result<Vec<u8>> {
@@ -188,12 +220,135 @@ fn serialize_object_to_bytes(object: spa::pod::Object) -> eyre::Result<Vec<u8>> 
     Ok(bytes)
 }
 
+fn build_pipewire_format_offers(
+    egl_i: &egl::Instance<egl::Static>,
+    egl_display: egl::Display,
+) -> Vec<FormatOffer> {
+    let formats = [
+        pw::spa::param::video::VideoFormat::RGBA,
+        pw::spa::param::video::VideoFormat::BGRA,
+        pw::spa::param::video::VideoFormat::RGB,
+        pw::spa::param::video::VideoFormat::BGR,
+        pw::spa::param::video::VideoFormat::RGBx,
+        pw::spa::param::video::VideoFormat::BGRx,
+    ];
+
+    let mut offers = Vec::new();
+    for format in formats {
+        let Some(fourcc) = drm_fourcc_for_spa_format(format) else {
+            continue;
+        };
+        let (modifiers, external_only_modifiers) =
+            query_modifiers_for_drm_format(egl_i, egl_display, fourcc);
+        offers.push(FormatOffer {
+            format,
+            fourcc,
+            modifiers,
+            external_only_modifiers,
+        });
+    }
+    offers
+}
+
+fn build_enum_format_object(
+    format: pw::spa::param::video::VideoFormat,
+    modifiers: &[i64],
+) -> spa::pod::Object {
+    let mut properties = vec![
+        spa::pod::Property::new(
+            spa::param::format::FormatProperties::MediaType.as_raw(),
+            spa::pod::Value::Id(spa::utils::Id(
+                spa::param::format::MediaType::Video.as_raw(),
+            )),
+        ),
+        spa::pod::Property::new(
+            spa::param::format::FormatProperties::MediaSubtype.as_raw(),
+            spa::pod::Value::Id(spa::utils::Id(
+                spa::param::format::MediaSubtype::Raw.as_raw(),
+            )),
+        ),
+        spa::pod::Property::new(
+            spa::param::format::FormatProperties::VideoFormat.as_raw(),
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Id(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Enum {
+                    default: spa::utils::Id(format.as_raw()),
+                    alternatives: vec![spa::utils::Id(format.as_raw())],
+                },
+            ))),
+        ),
+        spa::pod::Property::new(
+            spa::param::format::FormatProperties::VideoSize.as_raw(),
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Rectangle(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Range {
+                    default: spa::utils::Rectangle {
+                        width: 32,
+                        height: 32,
+                    },
+                    min: spa::utils::Rectangle {
+                        width: 1,
+                        height: 1,
+                    },
+                    max: spa::utils::Rectangle {
+                        width: 16384,
+                        height: 16384,
+                    },
+                },
+            ))),
+        ),
+        spa::pod::Property::new(
+            spa::param::format::FormatProperties::VideoFramerate.as_raw(),
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Fraction(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Range {
+                    default: spa::utils::Fraction { num: 60, denom: 1 },
+                    min: spa::utils::Fraction { num: 0, denom: 1 },
+                    max: spa::utils::Fraction { num: 500, denom: 1 },
+                },
+            ))),
+        ),
+    ];
+
+    if !modifiers.is_empty() {
+        let mut modifier_prop = spa::pod::Property::new(
+            spa::param::format::FormatProperties::VideoModifier.as_raw(),
+            spa::pod::Value::Choice(spa::pod::ChoiceValue::Long(spa::utils::Choice(
+                spa::utils::ChoiceFlags::empty(),
+                spa::utils::ChoiceEnum::Enum {
+                    default: modifiers[0],
+                    alternatives: modifiers.to_vec(),
+                },
+            ))),
+        );
+        modifier_prop.flags = spa::pod::PropertyFlags::MANDATORY;
+        properties.push(modifier_prop);
+    }
+
+    spa::pod::Object {
+        type_: spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
+        id: spa::param::ParamType::EnumFormat.as_raw(),
+        properties,
+    }
+}
+
+fn serialize_format_offers_to_bytes(offers: &[FormatOffer]) -> eyre::Result<Vec<Vec<u8>>> {
+    let mut format_bytes = Vec::new();
+    for offer in offers {
+        format_bytes.push(serialize_object_to_bytes(build_enum_format_object(
+            offer.format,
+            &offer.modifiers,
+        ))?);
+    }
+    Ok(format_bytes)
+}
+
 fn run_pipewire_stream(
     remote: PortalPipeWireRemote,
     max_frames: u32,
-    egl_i: Option<&egl::Instance<egl::Static>>,
-    egl_display: Option<egl::Display>,
-    prebuilt_format_bytes: Option<Vec<Vec<u8>>>,
+    _egl_i: Option<&egl::Instance<egl::Static>>,
+    _egl_display: Option<egl::Display>,
+    prebuilt_offers: Option<Vec<FormatOffer>>,
     frame_ring: Option<Arc<PipeWireFrameRing>>,
     stop: Option<Arc<AtomicBool>>,
 ) -> eyre::Result<()> {
@@ -218,6 +373,13 @@ fn run_pipewire_stream(
     let frame_fmt = std::rc::Rc::new(std::cell::Cell::new(None::<FrameFormat>));
     let mainloop_for_cb = mainloop.clone();
 
+    let offers = prebuilt_offers.unwrap_or_else(|| {
+        let egl_i = _egl_i.expect("missing EGL instance for pipewire stream");
+        let egl_display = _egl_display.expect("missing EGL display for pipewire stream");
+        build_pipewire_format_offers(egl_i, egl_display)
+    });
+    let offers_state = Rc::new(RefCell::new(offers));
+
     let _listener = stream
         .add_local_listener_with_user_data(spa::param::video::VideoInfoRaw::new())
         .state_changed({
@@ -233,6 +395,7 @@ fn run_pipewire_stream(
         })
         .param_changed({
             let frame_fmt = std::rc::Rc::clone(&frame_fmt);
+            let offers_state = Rc::clone(&offers_state);
             move |stream, user_data, id, param| {
                 let Some(param) = param else {
                     return;
@@ -271,11 +434,18 @@ fn run_pipewire_stream(
                     user_data.modifier(),
                 );
                 if let Some(fourcc) = drm_fourcc_for_spa_format(user_data.format()) {
+                    let use_external_texture = offers_state
+                        .borrow()
+                        .iter()
+                        .find(|offer| offer.fourcc == fourcc)
+                        .map(|offer| offer.external_only_modifiers.contains(&(user_data.modifier() as i64)))
+                        .unwrap_or(false);
                     frame_fmt.set(Some(FrameFormat {
                         width: user_data.size().width as i32,
                         height: user_data.size().height as i32,
                         fourcc,
                         modifier: Some(user_data.modifier()),
+                        use_external_texture,
                     }));
                 }
 
@@ -429,6 +599,19 @@ fn run_pipewire_stream(
 
             let next = frame_count.get().saturating_add(1);
             frame_count.set(next);
+
+            // for fd in &plane_fds {
+            //     let mut pfd = libc::pollfd {
+            //         fd: fd.as_raw_fd(),
+            //         events: libc::POLLOUT,
+            //         revents: 0,
+            //     };
+            //     let waited = libc::poll(&mut pfd as *mut libc::pollfd, 1, 8);
+            //     if waited == 0 {
+            //         log::trace!("pipewire dmabuf fence wait timeout on fd={}", fd.as_raw_fd());
+            //     }
+            // }
+
             stream.queue_raw_buffer(raw);
 
             if let (Some(ring), Some(fmt)) = (frame_ring.as_ref(), frame_fmt.get()) {
@@ -441,6 +624,7 @@ fn run_pipewire_stream(
                         height: fmt.height,
                         fourcc: fmt.fourcc,
                         modifier: fmt.modifier,
+                        use_external_texture: fmt.use_external_texture,
                         plane_fds,
                         offsets,
                         strides,
@@ -455,13 +639,7 @@ fn run_pipewire_stream(
         })
         .register()?;
 
-    let format_bytes = if let Some(bytes) = prebuilt_format_bytes {
-        bytes
-    } else {
-        let egl_i = egl_i.ok_or_else(|| eyre::eyre!("missing EGL instance for pipewire stream"))?;
-        let egl_display = egl_display.ok_or_else(|| eyre::eyre!("missing EGL display for pipewire stream"))?;
-        build_pipewire_enum_format_bytes(egl_i, egl_display)?
-    };
+    let format_bytes = serialize_format_offers_to_bytes(&offers_state.borrow())?;
 
     let mut params = format_bytes
         .iter()
@@ -502,10 +680,14 @@ struct FrameFormat {
     height: i32,
     fourcc: u32,
     modifier: Option<u64>,
+    use_external_texture: bool,
 }
 
 pub struct PipeWireCaptureProducer {
     stop: Arc<AtomicBool>,
+    // do we even need both?
+    ended: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -515,6 +697,14 @@ impl PipeWireCaptureProducer {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+    }
+
+    pub fn is_ended(&self) -> bool {
+        self.ended.load(Ordering::Acquire)
+    }
+
+    pub fn has_failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
     }
 }
 
@@ -529,15 +719,21 @@ impl Drop for PipeWireCaptureProducer {
 
 pub fn start_capture_producer(
     ring: Arc<PipeWireFrameRing>,
-    format_bytes: Vec<Vec<u8>>,
+    format_offers: Vec<FormatOffer>,
 ) -> Result<PipeWireCaptureProducer, String> {
     let stop = Arc::new(AtomicBool::new(false));
+    let ended = Arc::new(AtomicBool::new(false));
+    let failed = Arc::new(AtomicBool::new(false));
     let stop_thread = Arc::clone(&stop);
+    let ended_thread = Arc::clone(&ended);
+    let failed_thread = Arc::clone(&failed);
     let handle = thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(v) => v,
             Err(e) => {
                 log::error!("pipewire producer failed to create tokio runtime: {e}");
+                failed_thread.store(true, Ordering::Release);
+                ended_thread.store(true, Ordering::Release);
                 return;
             }
         };
@@ -545,6 +741,8 @@ pub fn start_capture_producer(
             Ok(v) => v,
             Err(e) => {
                 log::error!("pipewire producer failed to start screencast portal: {e}");
+                failed_thread.store(true, Ordering::Release);
+                ended_thread.store(true, Ordering::Release);
                 return;
             }
         };
@@ -553,15 +751,19 @@ pub fn start_capture_producer(
             u32::MAX,
             None,
             None,
-            Some(format_bytes),
+            Some(format_offers),
             Some(ring),
             Some(stop_thread),
         ) {
             log::error!("pipewire producer stream error: {e}");
+            failed_thread.store(true, Ordering::Release);
         }
+        ended_thread.store(true, Ordering::Release);
     });
     Ok(PipeWireCaptureProducer {
         stop,
+        ended,
+        failed,
         handle: Some(handle),
     })
 }
@@ -570,113 +772,15 @@ pub fn build_pipewire_enum_format_bytes(
     egl_i: &egl::Instance<egl::Static>,
     egl_display: egl::Display,
 ) -> eyre::Result<Vec<Vec<u8>>> {
-    let build_enum_format = |format: pw::spa::param::video::VideoFormat,
-                             modifiers: Option<&[i64]>|
-     -> spa::pod::Object {
-        let mut properties = vec![
-            spa::pod::Property::new(
-                spa::param::format::FormatProperties::MediaType.as_raw(),
-                spa::pod::Value::Id(spa::utils::Id(
-                    spa::param::format::MediaType::Video.as_raw(),
-                )),
-            ),
-            spa::pod::Property::new(
-                spa::param::format::FormatProperties::MediaSubtype.as_raw(),
-                spa::pod::Value::Id(spa::utils::Id(
-                    spa::param::format::MediaSubtype::Raw.as_raw(),
-                )),
-            ),
-            spa::pod::Property::new(
-                spa::param::format::FormatProperties::VideoFormat.as_raw(),
-                spa::pod::Value::Choice(spa::pod::ChoiceValue::Id(spa::utils::Choice(
-                    spa::utils::ChoiceFlags::empty(),
-                    spa::utils::ChoiceEnum::Enum {
-                        default: spa::utils::Id(format.as_raw()),
-                        alternatives: vec![spa::utils::Id(format.as_raw())],
-                    },
-                ))),
-            ),
-            spa::pod::Property::new(
-                spa::param::format::FormatProperties::VideoSize.as_raw(),
-                spa::pod::Value::Choice(spa::pod::ChoiceValue::Rectangle(spa::utils::Choice(
-                    spa::utils::ChoiceFlags::empty(),
-                    spa::utils::ChoiceEnum::Range {
-                        default: spa::utils::Rectangle {
-                            width: 32,
-                            height: 32,
-                        },
-                        min: spa::utils::Rectangle {
-                            width: 1,
-                            height: 1,
-                        },
-                        max: spa::utils::Rectangle {
-                            width: 16384,
-                            height: 16384,
-                        },
-                    },
-                ))),
-            ),
-            spa::pod::Property::new(
-                spa::param::format::FormatProperties::VideoFramerate.as_raw(),
-                spa::pod::Value::Choice(spa::pod::ChoiceValue::Fraction(spa::utils::Choice(
-                    spa::utils::ChoiceFlags::empty(),
-                    spa::utils::ChoiceEnum::Range {
-                        default: spa::utils::Fraction { num: 60, denom: 1 },
-                        min: spa::utils::Fraction { num: 0, denom: 1 },
-                        max: spa::utils::Fraction { num: 500, denom: 1 },
-                    },
-                ))),
-            ),
-        ];
+    let offers = build_pipewire_format_offers(egl_i, egl_display);
+    serialize_format_offers_to_bytes(&offers)
+}
 
-        if let Some(mods) = modifiers {
-            if !mods.is_empty() {
-                let mut modifier_prop = spa::pod::Property::new(
-                    spa::param::format::FormatProperties::VideoModifier.as_raw(),
-                    spa::pod::Value::Choice(spa::pod::ChoiceValue::Long(spa::utils::Choice(
-                        spa::utils::ChoiceFlags::empty(),
-                        spa::utils::ChoiceEnum::Enum {
-                            default: mods[0],
-                            alternatives: mods.to_vec(),
-                        },
-                    ))),
-                );
-                modifier_prop.flags = spa::pod::PropertyFlags::MANDATORY
-                    | spa::pod::PropertyFlags::from_bits_retain(
-                        spa::sys::SPA_POD_PROP_FLAG_DONT_FIXATE,
-                    );
-                properties.push(modifier_prop);
-            }
-        }
-
-        spa::pod::Object {
-            type_: spa::utils::SpaTypes::ObjectParamFormat.as_raw(),
-            id: spa::param::ParamType::EnumFormat.as_raw(),
-            properties,
-        }
-    };
-
-    let formats = [
-        pw::spa::param::video::VideoFormat::BGRx,
-        pw::spa::param::video::VideoFormat::BGR,
-        pw::spa::param::video::VideoFormat::RGBx,
-        pw::spa::param::video::VideoFormat::RGB,
-        pw::spa::param::video::VideoFormat::RGBA,
-        pw::spa::param::video::VideoFormat::BGRA,
-    ];
-
-    let mut format_bytes = Vec::new();
-    for format in formats {
-        let modifiers = drm_fourcc_for_spa_format(format)
-            .map(|drm| query_modifiers_for_drm_format(egl_i, egl_display, drm));
-
-        format_bytes.push(serialize_object_to_bytes(build_enum_format(
-            format,
-            modifiers.as_deref(),
-        ))?);
-        format_bytes.push(serialize_object_to_bytes(build_enum_format(format, None))?);
-    }
-    Ok(format_bytes)
+pub fn build_pipewire_format_offers_for_session(
+    egl_i: &egl::Instance<egl::Static>,
+    egl_display: egl::Display,
+) -> Vec<FormatOffer> {
+    build_pipewire_format_offers(egl_i, egl_display)
 }
 
 fn dup_fd_raw(raw_fd: i32) -> std::io::Result<OwnedFd> {

@@ -333,9 +333,10 @@ fn close_fds(plane_fds: &[Option<std::os::fd::OwnedFd>]) {
     }
 }
 
-fn egl_image_to_texture(
+fn egl_image_to_texture_target(
     egl: &khronos_egl::Instance<khronos_egl::Static>,
     image: khronos_egl::Image,
+    external: bool,
 ) -> Result<u32, EglError> {
     if image.as_ptr().is_null() {
         return Err(EglError::Unknown);
@@ -349,6 +350,9 @@ fn egl_image_to_texture(
         let gl_bind_texture = egl
             .get_proc_address("glBindTexture")
             .ok_or(EglError::MissingExt("glBindTexture"))?;
+        let gl_get_error = egl
+            .get_proc_address("glGetError")
+            .ok_or(EglError::MissingExt("glGetError"))?;
         let gl_tex_param_i = egl
             .get_proc_address("glTexParameteri")
             .ok_or(EglError::MissingExt("glTexParameteri"))?;
@@ -359,6 +363,7 @@ fn egl_image_to_texture(
         let gl_gen_textures: unsafe extern "C" fn(i32, *mut u32) =
             std::mem::transmute(gl_gen_textures);
         let gl_bind_texture: unsafe extern "C" fn(u32, u32) = std::mem::transmute(gl_bind_texture);
+        let gl_get_error: unsafe extern "C" fn() -> u32 = std::mem::transmute(gl_get_error);
         let gl_tex_param_i: unsafe extern "C" fn(u32, u32, i32) =
             std::mem::transmute(gl_tex_param_i);
         let gl_egl_image_target: unsafe extern "C" fn(u32, *const std::ffi::c_void) =
@@ -368,6 +373,7 @@ fn egl_image_to_texture(
         gl_gen_textures(1, &mut tex);
 
         const GL_TEXTURE_2D: u32 = 0x0DE1;
+        const GL_TEXTURE_EXTERNAL_OES: u32 = 0x8D65;
         const GL_LINEAR: u32 = 0x2601;
         const GL_CLAMP_TO_EDGE: u32 = 0x812F;
         const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
@@ -375,14 +381,25 @@ fn egl_image_to_texture(
         const GL_TEXTURE_WRAP_S: u32 = 0x2802;
         const GL_TEXTURE_WRAP_T: u32 = 0x2803;
 
-        gl_bind_texture(GL_TEXTURE_2D, tex);
+        let target = if external { GL_TEXTURE_EXTERNAL_OES } else { GL_TEXTURE_2D };
 
-        gl_tex_param_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR as i32);
-        gl_tex_param_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR as i32);
-        gl_tex_param_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE as i32);
-        gl_tex_param_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE as i32);
+        while gl_get_error() != 0 {}
 
-        gl_egl_image_target(GL_TEXTURE_2D, image.as_ptr() as *const std::ffi::c_void);
+        gl_bind_texture(target, tex);
+
+        gl_tex_param_i(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR as i32);
+        gl_tex_param_i(target, GL_TEXTURE_MAG_FILTER, GL_LINEAR as i32);
+        gl_tex_param_i(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE as i32);
+        gl_tex_param_i(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE as i32);
+
+        gl_egl_image_target(target, image.as_ptr() as *const std::ffi::c_void);
+
+        let err = gl_get_error();
+        if err != 0 {
+            return Err(EglError::Pipeline(format!(
+                "GL bind of EGLImage failed with error 0x{err:04x}"
+            )));
+        }
 
         Ok(tex)
     }
@@ -408,7 +425,7 @@ pub(crate) fn import_current_capture_texture(
     privd_session: &mut PrivdSession,
     egl: &khronos_egl::Instance<khronos_egl::Static>,
     display: khronos_egl::Display,
-) -> Result<(u32, i32, i32, u32), EglError> {
+) -> Result<(u32, i32, i32, u32, bool), EglError> {
     let ProbeResult {
         fb_id,
         fb_info: _,
@@ -424,6 +441,7 @@ pub(crate) fn import_current_capture_texture(
         height: frame_info.height,
         fourcc: frame_info.fourcc,
         modifier: frame_info.modifier,
+        use_external_texture: false,
         plane_fds: exported.fds,
         offsets: frame_info
             .offsets
@@ -444,12 +462,13 @@ pub(crate) fn import_capture_frame_texture(
     frame: CaptureFrame,
     egl: &khronos_egl::Instance<khronos_egl::Static>,
     display: khronos_egl::Display,
-) -> Result<(u32, i32, i32, u32), EglError> {
+) -> Result<(u32, i32, i32, u32, bool), EglError> {
     let fb_id = frame.fb_id;
     let w = frame.width;
     let h = frame.height;
     let fourcc = frame.fourcc;
     let modifier = frame.modifier;
+    let mut use_external_texture = frame.use_external_texture;
 
     let mut planes = Vec::new();
     for i in 0..frame.plane_fds.len().min(4) {
@@ -513,8 +532,21 @@ pub(crate) fn import_capture_frame_texture(
         }
     };
 
-    let texture = egl_image_to_texture(egl, image)?;
+    let texture = match egl_image_to_texture_target(egl, image, use_external_texture) {
+        Ok(tex) => tex,
+        Err(err) if !use_external_texture => {
+            log::warn!(
+                "egl image bind to GL_TEXTURE_2D failed for fb={} fourcc=0x{:08x} modifier={:?}: {err}; retrying external texture",
+                fb_id,
+                fourcc,
+                modifier,
+            );
+            use_external_texture = true;
+            egl_image_to_texture_target(egl, image, true)?
+        }
+        Err(err) => return Err(err),
+    };
     egl.destroy_image(display, image)
         .map_err(EglError::CreateImage)?;
-    Ok((texture, w, h, fb_id))
+    Ok((texture, w, h, fb_id, use_external_texture))
 }

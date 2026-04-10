@@ -114,11 +114,13 @@ pub fn run_capture_session(
         e
     })?;
     log::debug!("backend returned first frame, importing texture");
-    let (texture, source_w, source_h, mut prev_fb_id) =
+    let (texture, initial_source_w, initial_source_h, mut prev_fb_id, first_use_external_texture) =
         import_capture_frame_texture(first_frame, &egl, display).map_err(|e| {
             log::error!("initial frame import failed: {}", e);
             e
         })?;
+    let mut source_w = initial_source_w;
+    let mut source_h = initial_source_h;
     let output_w = options
         .output_width
         .map(|v| v.max(1) as i32)
@@ -218,6 +220,7 @@ pub fn run_capture_session(
     let fence = unsafe {
         pipelines[first_slot].render_with_cursor(
             NativeTexture(NonZero::new(texture).unwrap()),
+            first_use_external_texture,
             &cursor_state_empty,
         )
     }
@@ -309,7 +312,7 @@ pub fn run_capture_session(
             continue;
         }
 
-        let (frame_texture, frame_w, frame_h, fb_id) = match backend
+        let (frame_texture, frame_w, frame_h, fb_id, use_external_texture) = match backend
             .next_frame()
             .and_then(|frame| import_capture_frame_texture(frame, &egl, display))
         {
@@ -323,11 +326,17 @@ pub fn run_capture_session(
             }
         };
         if frame_w != source_w || frame_h != source_h {
-            let _ = delete_gl_texture(&egl, frame_texture);
-            return Err(EglError::Pipeline(format!(
-                "capture size changed from {}x{} to {}x{} during recording",
-                source_w, source_h, frame_w, frame_h
-            )));
+            log::warn!(
+                "capture source size changed from {}x{} to {}x{}; keeping encoder output at {}x{}",
+                source_w,
+                source_h,
+                frame_w,
+                frame_h,
+                output_w,
+                output_h
+            );
+            source_w = frame_w;
+            source_h = frame_h;
         }
 
         let cursor_state = if let (Some(ring), Some(ctex)) =
@@ -450,6 +459,7 @@ pub fn run_capture_session(
         let fence = unsafe {
             pipelines[slot].render_with_cursor(
                 NativeTexture(NonZero::new(frame_texture).unwrap()),
+                use_external_texture,
                 &cursor_state,
             )
         }

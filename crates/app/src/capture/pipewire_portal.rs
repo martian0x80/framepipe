@@ -1,11 +1,11 @@
-use std::{sync::Arc, thread, time::Duration};
+use std::{os::fd::{AsRawFd, FromRawFd, OwnedFd}, sync::Arc, thread, time::Duration};
 use khronos_egl as egl;
 
 use crate::{
     capture::types::CaptureFrame,
     drm_kms::{egl_context::EglError, privd, types::CaptureOptions},
     portal::pipewire::{
-        PipeWireCaptureProducer, build_pipewire_enum_format_bytes, start_capture_producer,
+        PipeWireCaptureProducer, build_pipewire_format_offers_for_session, start_capture_producer,
     },
     shared::pipewire_frame_ring::PipeWireFrameRing,
 };
@@ -17,19 +17,23 @@ pub struct PipeWirePortalBackend {
     ring: Option<Arc<PipeWireFrameRing>>,
     producer: Option<PipeWireCaptureProducer>,
     first_frame_seen: bool,
+    last_frame: Option<CaptureFrame>,
     privd: Option<privd::PrivdSession>,
 }
 
 impl CaptureBackend for PipeWirePortalBackend {
     fn start(&mut self, options: &CaptureOptions) -> Result<(), EglError> {
-        let ring = Arc::new(PipeWireFrameRing::new(64));
+        let ring = Arc::new(PipeWireFrameRing::new(8));
         self.ring = Some(ring);
         self.producer = None;
         self.first_frame_seen = false;
+        self.last_frame = None;
         let include_input_fds = options.mouse_tracking || options.cursor_composition;
-        let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
-            .map_err(|e| EglError::Pipeline(format!("failed to acquire device fds from privd: {e}")))?;
-        self.privd = Some(privd_session);
+        if include_input_fds {
+            let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
+                .map_err(|e| EglError::Pipeline(format!("failed to acquire device fds from privd: {e}")))?;
+            self.privd = Some(privd_session);
+        }
         Ok(())
     }
     
@@ -45,9 +49,8 @@ impl CaptureBackend for PipeWirePortalBackend {
             .ring
             .as_ref()
             .ok_or_else(|| EglError::Pipeline("pipewire backend ring not initialized".to_string()))?;
-        let enum_params = build_pipewire_enum_format_bytes(egl_i, display)
-            .map_err(|e| EglError::Pipeline(format!("failed to build pipewire enum formats: {e}")))?;
-        let producer = start_capture_producer(Arc::clone(ring), enum_params)
+        let offers = build_pipewire_format_offers_for_session(egl_i, display);
+        let producer = start_capture_producer(Arc::clone(ring), offers)
             .map_err(|e| EglError::Pipeline(format!("failed to start pipewire producer: {e}")))?;
         self.producer = Some(producer);
         Ok(())
@@ -62,19 +65,54 @@ impl CaptureBackend for PipeWirePortalBackend {
             .ring
             .as_ref()
             .ok_or_else(|| EglError::Pipeline("pipewire backend not started".to_string()))?;
+        let producer_ended = || {
+            self.producer
+                .as_ref()
+                .is_some_and(|p| p.is_ended() || p.has_failed())
+        };
 
-        let max_wait_iters = if self.first_frame_seen { 2_000 } else { usize::MAX };
-        for _ in 0..max_wait_iters {
+        let mut first_wait_logs: u32 = 0;
+        while !self.first_frame_seen {
             if let Some(frame) = ring.pop_latest() {
                 self.first_frame_seen = true;
+                log::info!("first pipewire frame received: {}x{} format={}", frame.width, frame.height, frame.fourcc);
+                self.last_frame = Some(dup_capture_frame(&frame)?);
                 return Ok(frame);
             }
-            thread::sleep(Duration::from_nanos(1));
+            if producer_ended() {
+                return Err(EglError::Pipeline(
+                    "pipewire stream ended before first frame".to_string(),
+                ));
+            }
+            first_wait_logs = first_wait_logs.saturating_add(1);
+            if first_wait_logs % 500 == 0 {
+                log::debug!(
+                    "pipewire backend waiting for first frame (stream may be paused until window damage)"
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
         }
 
-        Err(EglError::Pipeline(
-            "timeout waiting for pipewire frame".to_string(),
-        ))
+        for _ in 0..20 {
+            if let Some(frame) = ring.pop_latest() {
+                self.last_frame = Some(dup_capture_frame(&frame)?);
+                return Ok(frame);
+            }
+            if producer_ended() {
+                return Err(EglError::Pipeline("pipewire stream ended".to_string()));
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        if producer_ended() {
+            return Err(EglError::Pipeline("pipewire stream ended".to_string()));
+        }
+
+        if let Some(last) = self.last_frame.as_ref() {
+            return dup_capture_frame(last);
+        }
+
+        Err(EglError::Pipeline("no pipewire frame available".to_string()))
     }
 
     fn stop(&mut self) -> Result<(), EglError> {
@@ -82,10 +120,40 @@ impl CaptureBackend for PipeWirePortalBackend {
             producer.stop();
         }
         self.ring = None;
+        self.last_frame = None;
         Ok(())
     }
 
     fn take_input_fds(&mut self) -> Option<std::collections::HashMap<std::path::PathBuf, std::os::fd::OwnedFd>> {
         self.privd.as_mut().map(|s| std::mem::take(&mut s.input_fds))
     }
+}
+
+fn dup_fd_raw(raw_fd: i32) -> std::io::Result<OwnedFd> {
+    let dup_fd = unsafe { libc::fcntl(raw_fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if dup_fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(dup_fd) })
+}
+
+fn dup_capture_frame(frame: &CaptureFrame) -> Result<CaptureFrame, EglError> {
+    let mut fds = Vec::with_capacity(frame.plane_fds.len());
+    for fd in &frame.plane_fds {
+        let dup = dup_fd_raw(fd.as_raw_fd()).map_err(|e| {
+            EglError::Pipeline(format!("failed to dup pipewire frame fd: {e}"))
+        })?;
+        fds.push(dup);
+    }
+    Ok(CaptureFrame {
+        fb_id: frame.fb_id,
+        width: frame.width,
+        height: frame.height,
+        fourcc: frame.fourcc,
+        modifier: frame.modifier,
+        use_external_texture: frame.use_external_texture,
+        plane_fds: fds,
+        offsets: frame.offsets.clone(),
+        strides: frame.strides.clone(),
+    })
 }

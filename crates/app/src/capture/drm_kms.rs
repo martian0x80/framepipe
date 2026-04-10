@@ -61,6 +61,7 @@ impl CaptureBackend for DrmKmsBackend {
             height: frame.height,
             fourcc: frame.fourcc,
             modifier: frame.modifier,
+            use_external_texture: false,
             plane_fds: exported.fds,
             offsets: frame
                 .offsets
