@@ -4,9 +4,15 @@ WIP: ACTIVE DEVELOPMENT - EXPECT BREAKAGE
 
 Framepipe is a (zero-copy) GPU-accelerated screen recorder for Linux (Wayland only).
 It captures primary plane frames, composites cursor optionally, and encodes
-using GStreamer backends (VAAPI/QSV/CPU), with a postfx pipeline in progress.
+using GStreamer backends (VAAPI/QSV/CPU). It also supports global mouse tracking on Wayland.
+
+Two capture backends are available: DRM/KMS and XDG Portal (PipeWire). The former is more stable and convenient but requires some capabilities, pipwire support is experimental and mostly broken for now.
 
 This repo is experimental and not stable. Interfaces and CLI flags will change.
+
+[Demo Video](https://www.youtube.com/watch?v=bOC7lMbf2aY)
+
+ [![demo](https://img.youtube.com/vi/bOC7lMbf2aY/maxresdefault.jpg)](https://www.youtube.com/watch?v=bOC7lMbf2aY)
 
 ## Features (current)
 
