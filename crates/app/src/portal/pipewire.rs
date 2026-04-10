@@ -115,12 +115,14 @@ fn fourcc(a: u8, b: u8, c: u8, d: u8) -> u32 {
 
 fn drm_fourcc_for_spa_format(fmt: pw::spa::param::video::VideoFormat) -> Option<u32> {
     match fmt {
-        pw::spa::param::video::VideoFormat::BGRx => Some(fourcc(b'X', b'R', b'2', b'4')), // XRGB8888
-        pw::spa::param::video::VideoFormat::BGR => Some(fourcc(b'X', b'R', b'2', b'4')), // XRGB8888
-        pw::spa::param::video::VideoFormat::RGBx => Some(fourcc(b'X', b'B', b'2', b'4')), // XBGR8888
-        pw::spa::param::video::VideoFormat::RGB => Some(fourcc(b'X', b'B', b'2', b'4')), // XBGR8888
-        pw::spa::param::video::VideoFormat::RGBA => Some(fourcc(b'A', b'B', b'2', b'4')), // ABGR8888
-        pw::spa::param::video::VideoFormat::BGRA => Some(fourcc(b'A', b'R', b'2', b'4')), // ARGB8888
+        pw::spa::param::video::VideoFormat::BGRx => Some(drm::buffer::DrmFourcc::Xrgb8888 as u32),
+        pw::spa::param::video::VideoFormat::BGR => Some(drm::buffer::DrmFourcc::Xrgb8888 as u32),
+        pw::spa::param::video::VideoFormat::RGBx => Some(drm::buffer::DrmFourcc::Xbgr8888 as u32),
+        pw::spa::param::video::VideoFormat::RGB => Some(drm::buffer::DrmFourcc::Xbgr8888 as u32),
+        pw::spa::param::video::VideoFormat::RGBA => Some(drm::buffer::DrmFourcc::Abgr8888 as u32),
+        pw::spa::param::video::VideoFormat::BGRA => Some(drm::buffer::DrmFourcc::Argb8888 as u32),
+        pw::spa::param::video::VideoFormat::ARGB => Some(drm::buffer::DrmFourcc::Argb8888 as u32),
+        pw::spa::param::video::VideoFormat::ABGR => Some(drm::buffer::DrmFourcc::Abgr8888 as u32),
         _ => None,
     }
 }
@@ -205,12 +207,15 @@ fn build_pipewire_format_offers(
     egl_display: egl::Display,
 ) -> Vec<FormatOffer> {
     let formats = [
+        pw::spa::param::video::VideoFormat::RGBx,
+        pw::spa::param::video::VideoFormat::BGRx,
         pw::spa::param::video::VideoFormat::RGBA,
         pw::spa::param::video::VideoFormat::BGRA,
         pw::spa::param::video::VideoFormat::RGB,
         pw::spa::param::video::VideoFormat::BGR,
-        pw::spa::param::video::VideoFormat::RGBx,
-        pw::spa::param::video::VideoFormat::BGRx,
+        pw::spa::param::video::VideoFormat::ARGB,
+        pw::spa::param::video::VideoFormat::ABGR,
+        
     ];
 
     let mut offers = Vec::new();

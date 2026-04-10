@@ -405,8 +405,7 @@ fn try_bind_as_2d(
     egl: &khronos_egl::Instance<khronos_egl::Static>,
     image: khronos_egl::Image,
 ) -> Result<u32, EglError> {
-    const GL_TEXTURE_2D: u32 = 0x0DE1;
-    egl_image_to_texture_target(egl, image, GL_TEXTURE_2D)
+    egl_image_to_texture_target(egl, image, glow::TEXTURE_2D)
 }
 
 fn try_bind_as_external(
