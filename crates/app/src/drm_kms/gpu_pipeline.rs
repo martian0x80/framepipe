@@ -303,13 +303,14 @@ impl GpuPipeline {
             let out_tex = gl.create_texture().map_err(|e| e.to_string())?;
             gl.bind_texture(glow::TEXTURE_2D, Some(out_tex));
             let (internal_format, upload_format, upload_type) = match profile {
-                Profile::Hdr10 => (glow::RGBA16F, glow::RGBA, glow::HALF_FLOAT),
-                Profile::Hdr => (
-                    glow::RGB10_A2,
-                    glow::RGBA,
-                    glow::UNSIGNED_INT_2_10_10_10_REV,
-                ),
-                Profile::Sdr => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
+                // Profile::Hdr10 => (glow::RGBA16F, glow::RGBA, glow::HALF_FLOAT),
+                // Profile::Hdr => (
+                //     glow::RGB10_A2,
+                //     glow::RGBA,
+                //     glow::UNSIGNED_INT_2_10_10_10_REV,
+                // ),
+                // Profile::Sdr => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
+                _ => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
             };
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
