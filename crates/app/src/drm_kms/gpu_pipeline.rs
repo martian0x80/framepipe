@@ -1,5 +1,7 @@
 use glow::HasContext;
 
+use crate::drm_kms::types::Profile;
+
 const MAX_CURSOR_TAPS: usize = 8;
 
 #[derive(Clone)]
@@ -156,6 +158,7 @@ impl GpuPipeline {
         egl: &khronos_egl::Instance<khronos_egl::Static>,
         out_w: i32,
         out_h: i32,
+        profile: Profile
     ) -> Result<Self, String> {
         let gl = unsafe {
             glow::Context::from_loader_function(|s| {
@@ -299,17 +302,37 @@ impl GpuPipeline {
 
             let out_tex = gl.create_texture().map_err(|e| e.to_string())?;
             gl.bind_texture(glow::TEXTURE_2D, Some(out_tex));
+            let (internal_format, upload_format, upload_type) = match profile {
+                Profile::Hdr10 => (glow::RGBA16F, glow::RGBA, glow::HALF_FLOAT),
+                Profile::Hdr => (
+                    glow::RGB10_A2,
+                    glow::RGBA,
+                    glow::UNSIGNED_INT_2_10_10_10_REV,
+                ),
+                Profile::Sdr => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
+            };
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
-                glow::RGBA8 as i32,
+                internal_format as i32,
                 out_w,
                 out_h,
                 0,
-                glow::RGBA,
-                glow::UNSIGNED_BYTE,
+                upload_format,
+                upload_type,
                 glow::PixelUnpackData::Slice(None),
             );
+            let tex_err = gl.get_error();
+            if tex_err != glow::NO_ERROR {
+                return Err(format!(
+                    "output texture allocation failed: profile={:?} internal=0x{:x} format=0x{:x} type=0x{:x} gl_error=0x{:x}",
+                    profile,
+                    internal_format,
+                    upload_format,
+                    upload_type,
+                    tex_err
+                ));
+            }
             gl.tex_parameter_i32(
                 glow::TEXTURE_2D,
                 glow::TEXTURE_MIN_FILTER,
@@ -341,8 +364,12 @@ impl GpuPipeline {
                 Some(out_tex),
                 0,
             );
-            if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
-                return Err("FBO incomplete".into());
+            let fbo_status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
+            if fbo_status != glow::FRAMEBUFFER_COMPLETE {
+                return Err(format!(
+                    "FBO incomplete: status=0x{:x} profile={:?} internal=0x{:x}",
+                    fbo_status, profile, internal_format
+                ));
             }
             log::trace!("Framebuffer created and output texture attached successfully");
 

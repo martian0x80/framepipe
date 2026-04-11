@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::app::signals::CaptureControl;
+use crate::{app::signals::CaptureControl, drm_kms::types::Profile};
 use crate::capture::backend::CaptureBackend;
 use crate::cursor::cursor::*;
 use crate::drm_kms::{
@@ -163,7 +163,7 @@ pub fn run_capture_session(
     let mut pipelines: Vec<gpu_pipeline::GpuPipeline> = Vec::with_capacity(inflight_slots);
     for _ in 0..inflight_slots {
         pipelines.push(
-            unsafe { gpu_pipeline::GpuPipeline::new(&egl, output_w, output_h) }
+            unsafe { gpu_pipeline::GpuPipeline::new(&egl, output_w, output_h, options.profile.unwrap_or(Profile::Sdr)) }
                 .map_err(EglError::Pipeline)?,
         );
     }

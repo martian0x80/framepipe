@@ -548,7 +548,7 @@ fn run_pipewire_stream(
                     } else {
                         ((*d.chunk).offset, (*d.chunk).size, (*d.chunk).stride)
                     };
-                    log::debug!(
+                    log::trace!(
                         "pipewire dmabuf plane {}: fd={} offset={} size={} stride={}",
                         i,
                         d.fd,

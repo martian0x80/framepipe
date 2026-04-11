@@ -71,6 +71,14 @@ fn fourcc_to_drm_format(fourcc: u32) -> Option<&'static str> {
         0x34324258 => Some("XB24"), // DRM_FORMAT_XBGR8888
         0x34325258 => Some("XR24"), // DRM_FORMAT_XRGB8888
         0x34325241 => Some("AR24"), // DRM_FORMAT_ARGB8888
+        0x30334241 => Some("AB30"), // DRM_FORMAT_ABGR2101010
+        0x30334258 => Some("XB30"), // DRM_FORMAT_XBGR2101010
+        0x30335241 => Some("AR30"), // DRM_FORMAT_ARGB2101010
+        0x30335258 => Some("XR30"), // DRM_FORMAT_XRGB2101010
+        0x48344241 => Some("AB4H"), // DRM_FORMAT_ABGR16161616F
+        0x48344258 => Some("XB4H"), // DRM_FORMAT_XBGR16161616F
+        0x48345241 => Some("AR4H"), // DRM_FORMAT_ARGB16161616F
+        0x48345258 => Some("XR4H"), // DRM_FORMAT_XRGB16161616F
         0x3231564e => Some("NV12"), // DRM_FORMAT_NV12
         _ => None,
     }
@@ -82,6 +90,10 @@ fn fourcc_to_raw_format(fourcc: u32) -> Option<&'static str> {
         0x34324258 => Some("RGBx"), // DRM_FORMAT_XBGR8888
         0x34325241 => Some("BGRA"), // DRM_FORMAT_ARGB8888
         0x34325258 => Some("BGRx"), // DRM_FORMAT_XRGB8888
+        0x30334241 => Some("RGB10A2"), // DRM_FORMAT_ABGR2101010
+        0x30334258 => Some("RGB10A2"), // DRM_FORMAT_XBGR2101010
+        0x30335241 => Some("BGR10A2"), // DRM_FORMAT_ARGB2101010
+        0x30335258 => Some("BGR10A2"), // DRM_FORMAT_XRGB2101010
         0x3231564e => Some("NV12"), // DRM_FORMAT_NV12
         _ => None,
     }
@@ -317,8 +329,7 @@ fn set_appsrc_caps(
     opts: &EncoderOptions,
 ) -> Result<(), String> {
     let drm = fourcc_to_drm_format(ex.fourcc);
-    let raw = fourcc_to_raw_format(ex.fourcc)
-        .ok_or_else(|| format!("unsupported fourcc 0x{:08x}", ex.fourcc))?;
+    let raw = fourcc_to_raw_format(ex.fourcc);
     let fps = opts.fps.max(1);
     let range = &opts.color_range.to_string();
     let colorimetry = opts.colorimetry.to_string();
@@ -329,6 +340,7 @@ fn set_appsrc_caps(
     // Some drivers expose DMA_DRM AB24 only for specific non-linear modifiers.
     // If exporter gives linear modifier (0), prefer plain raw caps for compatibility.
     if ex.modifier == 0 {
+        if let Some(raw) = raw {
         let raw_fallback = format!(
             "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
             raw,
@@ -343,6 +355,7 @@ fn set_appsrc_caps(
             log::debug!("Using appsrc caps (linear modifier fallback): {raw_fallback}");
             appsrc.set_caps(Some(&caps));
             return Ok(());
+        }
         }
     }
 
@@ -391,37 +404,44 @@ fn set_appsrc_caps(
         }
     }
 
-    let dmabuf_raw = format!(
-        "video/x-raw(memory:DMABuf),format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
-        raw,
-        ex.width,
-        ex.height,
-        fps,
-        range,
-        colorimetry.as_str(),
-        transfer_suffix.as_str()
-    );
-    if let Ok(caps) = gst::Caps::from_str(&dmabuf_raw) {
-        log::debug!("Using appsrc caps: {dmabuf_raw}");
+    if let Some(raw) = raw {
+        let dmabuf_raw = format!(
+            "video/x-raw(memory:DMABuf),format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
+            raw,
+            ex.width,
+            ex.height,
+            fps,
+            range,
+            colorimetry.as_str(),
+            transfer_suffix.as_str()
+        );
+        if let Ok(caps) = gst::Caps::from_str(&dmabuf_raw) {
+            log::debug!("Using appsrc caps: {dmabuf_raw}");
+            appsrc.set_caps(Some(&caps));
+            return Ok(());
+        }
+
+        let raw_fallback = format!(
+            "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
+            raw,
+            ex.width,
+            ex.height,
+            fps,
+            range,
+            colorimetry.as_str(),
+            transfer_suffix.as_str()
+        );
+        let caps = gst::Caps::from_str(&raw_fallback)
+            .map_err(|e| format!("fallback caps parse failed: {e}"))?;
+        log::debug!("Using appsrc caps: {raw_fallback}");
         appsrc.set_caps(Some(&caps));
         return Ok(());
     }
 
-    let raw_fallback = format!(
-        "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
-        raw,
-        ex.width,
-        ex.height,
-        fps,
-        range,
-        colorimetry.as_str(),
-        transfer_suffix.as_str()
-    );
-    let caps = gst::Caps::from_str(&raw_fallback)
-        .map_err(|e| format!("fallback caps parse failed: {e}"))?;
-    log::debug!("Using appsrc caps: {raw_fallback}");
-    appsrc.set_caps(Some(&caps));
-    Ok(())
+    Err(format!(
+        "unsupported fourcc=0x{:08x} modifier=0x{:016x} (no usable raw/drm mapping)",
+        ex.fourcc, ex.modifier
+    ))
 }
 
 fn vaapi_rate_control(mode: &BitrateMode, codec: &VideoCodec) -> Result<&'static str, EncodeError> {

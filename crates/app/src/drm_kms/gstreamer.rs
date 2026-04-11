@@ -44,6 +44,7 @@ fn video_format_for_fourcc(fourcc: u32) -> Option<gst_video::VideoFormat> {
         0x3231564e => Some(gst_video::VideoFormat::Nv12), // DRM_FORMAT_NV12
         0x48344241 => Some(gst_video::VideoFormat::Rgb16), // DRM_FORMAT_ABGR16161616
         0x30314241 => Some(gst_video::VideoFormat::R210), // DRM_FORMAT_ABGR2101010
+        0x30334241 => Some(gst_video::VideoFormat::R210), // DRM_FORMAT_ABGR2101010
         _ => None,
     }
 }
