@@ -3,6 +3,7 @@ use std::os::fd::AsRawFd;
 use gstreamer::{self as gst};
 use gstreamer_allocators::{self as gst_alloc, DmaBufAllocatorExtManual};
 use gstreamer_app as gst_app;
+use gstreamer_video as gst_video;
 
 use crate::drm_kms::types::ExportedDmabuf;
 
@@ -32,6 +33,19 @@ fn dmabuf_size(fd: std::os::fd::RawFd) -> std::io::Result<usize> {
         ));
     }
     Ok(st.st_size as usize)
+}
+
+fn video_format_for_fourcc(fourcc: u32) -> Option<gst_video::VideoFormat> {
+    match fourcc {
+        0x34324241 => Some(gst_video::VideoFormat::Rgba), // DRM_FORMAT_ABGR8888
+        0x34324258 => Some(gst_video::VideoFormat::Rgbx), // DRM_FORMAT_XBGR8888
+        0x34325241 => Some(gst_video::VideoFormat::Bgra), // DRM_FORMAT_ARGB8888
+        0x34325258 => Some(gst_video::VideoFormat::Bgrx), // DRM_FORMAT_XRGB8888
+        0x3231564e => Some(gst_video::VideoFormat::Nv12), // DRM_FORMAT_NV12
+        0x48344241 => Some(gst_video::VideoFormat::Rgb16), // DRM_FORMAT_ABGR16161616
+        0x30314241 => Some(gst_video::VideoFormat::R210), // DRM_FORMAT_ABGR2101010
+        _ => None,
+    }
 }
 
 pub fn push_exported_dmabuf(
@@ -74,14 +88,11 @@ pub fn push_exported_dmabuf(
         );
     }
 
-    // 1) Create empty buffer
     let mut buffer = gst::Buffer::new();
 
     {
         let buf = buffer.get_mut().unwrap();
 
-        // 2) Append one DMABuf memory block per plane fd
-        // API names can vary slightly by gst-rs version.
         let allocator = gst_alloc::DmaBufAllocator::new();
         for fd in &ex.fds {
             let size = dmabuf_size(fd.as_raw_fd())
@@ -97,18 +108,20 @@ pub fn push_exported_dmabuf(
             buf.append_memory(dmabuf_mem);
         }
 
-        // 3) Attach VideoMeta with plane offsets/strides
-        // format is DMA_DRM + drm-format in caps, so VideoMeta should match layout.
-        // gst_video::VideoMeta::add_full(
-        //     buf,
-        //     gst_video::VideoFrameFlags::empty(),
-        //     gst_video::VideoFormat::Xrgb, // keep DMA_DRM in caps; meta is layout carrier
-        //     ex.width as u32,
-        //     ex.height as u32,
-        //     &ex.offsets.iter().map(|v| *v as usize).collect::<Vec<_>>(),
-        //     &ex.strides.iter().map(|v| *v as i32).collect::<Vec<_>>(),
-        // )
-        // .map_err(|e| ExportError::VideoMeta(format!("Failed to add VideoMeta: {e}")))?;
+        let video_format = video_format_for_fourcc(ex.fourcc).ok_or_else(|| {
+            ExportError::VideoMeta(format!("unsupported video format 0x{:08x}", ex.fourcc))
+        })?;
+
+        gst_video::VideoMeta::add_full(
+            buf,
+            gst_video::VideoFrameFlags::empty(),
+            video_format,
+            ex.width as u32,
+            ex.height as u32,
+            &ex.offsets.iter().map(|v| *v as usize).collect::<Vec<_>>(),
+            &ex.strides.iter().map(|v| *v as i32).collect::<Vec<_>>(),
+        )
+        .map_err(|e| ExportError::VideoMeta(format!("Failed to add VideoMeta: {e}")))?;
 
         buf.set_pts(gst::ClockTime::from_nseconds(pts_ns));
         buf.set_dts(gst::ClockTime::from_nseconds(pts_ns));
