@@ -175,7 +175,7 @@ pub fn init_wayland(
             if !state.waiting_for_anchor && last_anchor_at.elapsed() >= period {
                 state.waiting_for_anchor = true;
                 state.resync_probe_mode = true;
-                state.resync_deadline = Some(Instant::now() + Duration::from_millis(120));
+                state.resync_deadline = Some(Instant::now() + Duration::from_millis(50));
                 state.set_input_region_probe(&qh);
                 log::trace!(
                     "Periodic resync requested after {:?}; using probe input region",
@@ -196,7 +196,7 @@ pub fn init_wayland(
             state.resync_deadline = None;
             state.last_anchor_at = Some(Instant::now());
             state.set_input_region_clickthrough(&qh);
-            debug!("Resync probe timed out; restoring click-through input region");
+            log::debug!("Resync probe timed out; restoring click-through input region");
         }
 
         let _ = event_queue.dispatch_pending(&mut state);
@@ -464,7 +464,7 @@ impl WaylandState {
     fn set_input_region_probe(&self, qh: &QueueHandle<Self>) {
         let region = self.compositor_state.wl_compositor().create_region(qh, ());
         let sample = self.mouse_tracker.sample();
-        let box_size = 96_i32;
+        let box_size = 512_i32;
         let half = box_size / 2;
         let max_x = self.width.saturating_sub(1) as i32;
         let max_y = self.height.saturating_sub(1) as i32;

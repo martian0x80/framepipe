@@ -181,6 +181,19 @@ impl MouseTrackerLibinput {
                             seen_anchor_epoch = st.anchor_epoch;
                             batch_dx = 0.0;
                             batch_dy = 0.0;
+                            let now = Instant::now();
+                            // reposition mouse hard
+                            if let Some(ref ring) = ring {
+                                ring.push(MouseEvent {
+                                    t_ns: now.duration_since(tracker_start)
+                                        .as_nanos()
+                                        .min(u64::MAX as u128) as u64,
+                                    x: st.x,
+                                    y: st.y,
+                                    max_x: st.max_x,
+                                    max_y: st.max_y,
+                                });
+                            }
                             debug!(
                                 "mouse tracker observed anchor epoch change -> {}, cleared pending batch deltas",
                                 seen_anchor_epoch
