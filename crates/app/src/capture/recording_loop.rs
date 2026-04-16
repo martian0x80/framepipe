@@ -62,8 +62,11 @@ pub fn run_capture_session(
         let recording_info = MouseTrackRecordingInfo {
             started_unix_ms,
             output_path: match &options.output {
-                CaptureOutput::File(path) => Some(path.to_string_lossy().into_owned()),
+                // CaptureOutput::File(path) => Some(path.to_string_lossy().into_owned()),
+                // disabling this for now, since we don't really have a use case for it yet
+                CaptureOutput::File(_) => None,
                 CaptureOutput::Preview => None,
+                CaptureOutput::EmbeddedPreview => None,
             },
             card_path: Some(options.card_path.clone()),
             connector: options.connector.clone(),
@@ -158,6 +161,15 @@ pub fn run_capture_session(
         profile: options.profile,
     };
 
+    let preview_mailbox = if matches!(options.output, CaptureOutput::EmbeddedPreview) {
+        options
+            .preview_mailbox
+            .clone()
+            .or_else(|| Some(common::types::PreviewMailbox::new()))
+    } else {
+        None
+    };
+
     let inflight_slots = crate::encode::recommended_slots(&enc_opts).max(3);
     log::info!("Using {} in-flight render surfaces", inflight_slots);
     let mut pipelines: Vec<gpu_pipeline::GpuPipeline> = Vec::with_capacity(inflight_slots);
@@ -242,25 +254,30 @@ pub fn run_capture_session(
         pipelines[first_slot].gl.finish();
     }
 
-    let first_exported = unsafe {
-        egl_dmabuf_export::export_rgba_tex_to_dmabuf(
-            &egl,
-            display,
-            context,
-            pipelines[first_slot].output_texture().0.into(),
-            output_w,
-            output_h,
-        )
-    }
-    .map_err(EglError::Export)?;
+    let first_exported = if matches!(options.output, CaptureOutput::EmbeddedPreview) {
+        None
+    } else {
+        let ex = unsafe {
+            egl_dmabuf_export::export_rgba_tex_to_dmabuf(
+                &egl,
+                display,
+                context,
+                pipelines[first_slot].output_texture().0.into(),
+                output_w,
+                output_h,
+            )
+        }
+        .map_err(EglError::Export)?;
 
-    log::info!(
-        "Exported dmabuf: {}x{} fourcc=0x{:08x} planes={}",
-        first_exported.width,
-        first_exported.height,
-        first_exported.fourcc,
-        first_exported.fds.len()
-    );
+        log::info!(
+            "Exported dmabuf: {}x{} fourcc=0x{:08x} planes={}",
+            ex.width,
+            ex.height,
+            ex.fourcc,
+            ex.fds.len()
+        );
+        Some(ex)
+    };
 
     let frame_period = Duration::from_nanos(1_000_000_000u64 / fps as u64);
     let dump_frames = options.dump_frames;
@@ -270,19 +287,25 @@ pub fn run_capture_session(
             .map_err(|e| EglError::Pipeline(format!("failed to create dump dir: {e}")))?;
     }
 
-    let mut encoder = match &options.output {
-        CaptureOutput::Preview => crate::encode::GstEncoder::new_with_output(
-            crate::encode::EncoderOutput::Preview,
-            &first_exported,
-            enc_opts.clone(),
-        )
-        .map_err(|e| EglError::Pipeline(e.to_string()))?,
-        CaptureOutput::File(path) => crate::encode::GstEncoder::new(
-            &path.to_string_lossy(),
-            &first_exported,
-            enc_opts.clone(),
-        )
-        .map_err(|e| EglError::Pipeline(e.to_string()))?,
+    let mut encoder = match (&options.output, first_exported.as_ref()) {
+        (CaptureOutput::EmbeddedPreview, _) => None,
+        (CaptureOutput::Preview, Some(ex)) => Some(
+            crate::encode::GstEncoder::new_with_output(
+                crate::encode::EncoderOutput::Preview,
+                ex,
+                enc_opts.clone(),
+            )
+            .map_err(|e| EglError::Pipeline(e.to_string()))?,
+        ),
+        (CaptureOutput::File(path), Some(ex)) => Some(
+            crate::encode::GstEncoder::new(&path.to_string_lossy(), ex, enc_opts.clone())
+                .map_err(|e| EglError::Pipeline(e.to_string()))?,
+        ),
+        _ => {
+            return Err(EglError::Pipeline(
+                "missing first exported dmabuf for encoder init".to_string(),
+            ));
+        }
     };
 
     let mut next_deadline = Instant::now();
@@ -290,9 +313,10 @@ pub fn run_capture_session(
     let mut last_forced_keyframe_frame: u64 = 0;
     let mut last_cursor_update = Instant::now();
     let mut last_cursor_sample: Option<(f32, f32, Instant)> = None;
-    encoder
-        .push_frame(&first_exported)
-        .map_err(|e| EglError::Pipeline(e.to_string()))?;
+    if let (Some(enc), Some(ex)) = (encoder.as_mut(), first_exported.as_ref()) {
+        enc.push_frame(ex)
+            .map_err(|e| EglError::Pipeline(e.to_string()))?;
+    }
     let _ = delete_gl_texture(&egl, texture);
     frame_idx += 1;
 
@@ -304,7 +328,9 @@ pub fn run_capture_session(
         if control.resume_req.swap(false, Ordering::Relaxed) {
             control.paused.store(false, Ordering::Relaxed);
             log::info!("Recording resumed (SIGUSR2)");
-            encoder.request_keyframe("resume");
+            if let Some(enc) = encoder.as_mut() {
+                enc.request_keyframe("resume");
+            }
             last_forced_keyframe_frame = frame_idx;
         }
         if control.paused.load(Ordering::Relaxed) {
@@ -483,6 +509,26 @@ pub fn run_capture_session(
             pipelines[slot].gl.finish();
         }
 
+        if matches!(options.output, CaptureOutput::EmbeddedPreview) {
+            if preview_mailbox.is_some() {
+                pipelines[slot]
+                    .copy_to_mailbox(preview_mailbox.as_ref().unwrap())
+                    .map_err(|e| EglError::Pipeline(e.to_string()))?;
+            }
+            // for debug
+            preview_mailbox.as_ref().unwrap().get_frame()
+                .map(|f| log::trace!("Updated preview mailbox with frame t_ns={}", f.t_ns));
+            let _ = delete_gl_texture(&egl, frame_texture);
+            frame_idx += 1;
+            next_deadline += frame_period;
+            let now = Instant::now();
+            if next_deadline > now {
+                thread::sleep(next_deadline - now);
+            }
+            // skip the encoder, since the ui handles rendering directly
+            continue;
+        }
+        
         let exported = unsafe {
             egl_dmabuf_export::export_rgba_tex_to_dmabuf(
                 &egl,
@@ -495,9 +541,14 @@ pub fn run_capture_session(
         }
         .map_err(EglError::Export)?;
 
-        encoder
-            .push_frame(&exported)
-            .map_err(|e| EglError::Pipeline(e.to_string()))?;
+        if let Some(enc) = encoder.as_mut() {
+            enc.push_frame(&exported)
+                .map_err(|e| EglError::Pipeline(e.to_string()))?;
+        } else {
+            return Err(EglError::Pipeline(
+                "encoder unexpectedly unavailable in non-embedded mode".to_string(),
+            ));
+        }
         let _ = delete_gl_texture(&egl, frame_texture);
         frame_idx += 1;
 
@@ -528,7 +579,9 @@ pub fn run_capture_session(
         }
 
         if frame_idx.saturating_sub(last_forced_keyframe_frame) >= (fps as u64).saturating_mul(2) {
-            encoder.request_keyframe("periodic");
+            if let Some(enc) = encoder.as_mut() {
+                enc.request_keyframe("periodic");
+            }
             last_forced_keyframe_frame = frame_idx;
         }
         log::trace!("Captured frame {} (fb {})", frame_idx, fb_id);
@@ -547,9 +600,10 @@ pub fn run_capture_session(
             .map_err(|e| EglError::Pipeline(format!("failed to delete cursor texture: {e}")))?;
     }
 
-    encoder
-        .finish()
-        .map_err(|e: crate::encode::EncodeError| EglError::Pipeline(e.to_string()))?;
+    if let Some(enc) = encoder {
+        enc.finish()
+            .map_err(|e: crate::encode::EncodeError| EglError::Pipeline(e.to_string()))?;
+    }
 
     let mouse_file = if use_mouse_tracking {
         options.mouse_tracking_file.to_string_lossy().into_owned()
@@ -563,7 +617,7 @@ pub fn run_capture_session(
     );
 
     match &options.output {
-        CaptureOutput::Preview => log::info!("Preview stopped"),
+        CaptureOutput::Preview | CaptureOutput::EmbeddedPreview => log::info!("Preview stopped"),
         CaptureOutput::File(path) => {
             log::info!(
                 "Video encoding complete, output saved to {}",

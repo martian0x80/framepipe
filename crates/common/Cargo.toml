@@ -7,3 +7,4 @@ edition = "2024"
 serde = { workspace = true, features = ["derive"] }
 bincode = { workspace = true }
 nix = { workspace = true }
+arc-swap = "1.9.1"

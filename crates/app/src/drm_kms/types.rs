@@ -215,6 +215,7 @@ impl ToString for Profile {
 pub enum CaptureOutput {
     File(PathBuf),
     Preview,
+    EmbeddedPreview,
 }
 
 #[derive(Debug, Clone)]
@@ -265,4 +266,5 @@ pub struct CaptureOptions {
     pub wayland_sync_frequency: f64,
     pub mouse_tracking_file: PathBuf,
     pub profile: Option<Profile>,
+    pub preview_mailbox: Option<common::types::PreviewMailbox>,
 }

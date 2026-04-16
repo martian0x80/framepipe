@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use common::types::{PreviewFrame, PreviewMailbox};
 use glow::HasContext;
 
 use crate::drm_kms::types::Profile;
@@ -511,8 +514,70 @@ impl GpuPipeline {
         }
     }
 
+    pub fn read_pixels(&self) -> Result<Vec<u8>, String> {
+        unsafe {
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
+            let fbo_status = self.gl.check_framebuffer_status(glow::FRAMEBUFFER);
+            if fbo_status != glow::FRAMEBUFFER_COMPLETE {
+                return Err(format!(
+                    "FBO incomplete: status=0x{:x}",
+                    fbo_status
+                ));
+            }
+            // RGBA8 only readback for now
+            let mut pixels = vec![0u8; (self.out_w * self.out_h * 4) as usize];
+            // let pbo = glow::Context::create_buffer(&self.gl).map_err(|e| e.to_string())?;
+            // self.gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
+            // self.gl.buffer_data_u8_slice(
+            //     glow::PIXEL_PACK_BUFFER,
+            //     &pixels,
+            //     glow::STREAM_READ,
+            // );
+            self.gl.read_pixels(
+                0,
+                0,
+                self.out_w,
+                self.out_h,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut pixels)),
+            );
+            Ok(pixels)
+        }
+    }
+
+    pub fn copy_to_mailbox(&self, mailbox: &PreviewMailbox) -> Result<(), String> {
+        let pixels = self.read_pixels()?;
+        let preview_frame = PreviewFrame {
+            width: self.out_w as u32,
+            height: self.out_h as u32,
+            rgba: Arc::from(pixels),
+            t_ns: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_nanos() as u64,
+        };
+        mailbox.update_frame(preview_frame);
+        Ok(())
+    }
+
     pub fn output_texture(&self) -> glow::NativeTexture {
         self.out_tex
+    }
+}
+
+impl Drop for GpuPipeline {
+    fn drop(&mut self) {
+        unsafe {
+            self.gl.delete_program(self.prog);
+            if let Some(prog_ext) = self.prog_external {
+                self.gl.delete_program(prog_ext);
+            }
+            self.gl.delete_vertex_array(self.vao);
+            self.gl.delete_buffer(self.vbo);
+            self.gl.delete_framebuffer(self.fbo);
+            self.gl.delete_texture(self.out_tex);
+        }
     }
 }
 

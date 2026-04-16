@@ -12,13 +12,17 @@ pub struct CaptureControl {
 }
 
 impl CaptureControl {
-    pub fn register() -> Result<Self, String> {
-        let control = Self {
+    pub fn new_unregistered() -> Self {
+        Self {
             stop_requested: Arc::new(AtomicBool::new(false)),
             pause_req: Arc::new(AtomicBool::new(false)),
             resume_req: Arc::new(AtomicBool::new(false)),
             paused: Arc::new(AtomicBool::new(false)),
-        };
+        }
+    }
+
+    pub fn register() -> Result<Self, String> {
+        let control = Self::new_unregistered();
 
         signal_flag::register(SIGINT, Arc::clone(&control.stop_requested))
             .map_err(|e| format!("failed to register SIGINT: {e}"))?;
