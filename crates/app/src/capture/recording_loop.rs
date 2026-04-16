@@ -13,7 +13,7 @@ use crate::cursor::cursor::*;
 use crate::drm_kms::{
     debug, egl_dmabuf_export, gpu_pipeline,
     gpu_pipeline::create_default_cursor_texture,
-    types::{CaptureOptions, CaptureOutput},
+    types::{CaptureOptions, CaptureOutput, LiveSettings},
 };
 use crate::shared::mouse_ring::RingBuffer;
 use crate::wayland::layer::{TrackingControl, init_wayland};
@@ -148,6 +148,8 @@ pub fn run_capture_session(
     );
 
     let fps: u32 = options.fps.max(1);
+    let fallback_live: std::sync::Arc<LiveSettings> =
+        std::sync::Arc::new(LiveSettings::from_options(&options));
     let enc_opts = crate::encode::EncoderOptions {
         fps,
         bitrate_kbps: options.bitrate_kbps,
@@ -321,6 +323,15 @@ pub fn run_capture_session(
     frame_idx += 1;
 
     while !control.stop_requested.load(Ordering::Relaxed) {
+        // Snapshot live-mutable settings once at the top of each iteration.
+        let live: std::sync::Arc<LiveSettings> = options
+            .live_settings
+            .as_ref()
+            .map(|m| m.get())
+            .unwrap_or_else(|| std::sync::Arc::clone(&fallback_live));
+
+        // Recompute frame period from the live fps
+        let frame_period = Duration::from_nanos(1_000_000_000u64 / live.fps.max(1) as u64);
         if control.pause_req.swap(false, Ordering::Relaxed) {
             control.paused.store(true, Ordering::Relaxed);
             log::info!("Recording paused (SIGUSR1)");
@@ -402,17 +413,17 @@ pub fn run_capture_session(
                 let now = Instant::now();
                 let dt = (now - last_cursor_update).as_secs_f32().clamp(0.0, 0.05);
                 last_cursor_update = now;
-                let (s_cursor_x, s_cursor_y) = if options.cursor_smooth {
+                let (s_cursor_x, s_cursor_y) = if live.cursor_smooth {
                     cursor_smoother.update(
                         cursor_x,
                         cursor_y,
                         dt,
-                        options.cursor_spring_k,
-                        options.cursor_spring_d,
-                        options.cursor_max_speed,
-                        options.cursor_snap_px,
-                        options.cursor_smooth_ms,
-                        options.cursor_deadzone_px,
+                        live.cursor_spring_k,
+                        live.cursor_spring_d,
+                        live.cursor_max_speed,
+                        live.cursor_snap_px,
+                        live.cursor_smooth_ms,
+                        live.cursor_deadzone_px,
                     )
                 } else {
                     (cursor_x, cursor_y)
@@ -424,23 +435,23 @@ pub fn run_capture_session(
                 let mut motion_stretch = 1.0f32;
                 let mut motion_squash = 1.0f32;
 
-                if options.cursor_smear {
+                if live.cursor_smear {
                     if let Some((prev_x, prev_y, prev_t)) = last_cursor_sample {
                         let vdt = (now - prev_t).as_secs_f32().max(1e-4);
                         let vx = (s_cursor_x - prev_x) / vdt;
                         let vy = (s_cursor_y - prev_y) / vdt;
                         let speed = (vx * vx + vy * vy).sqrt();
-                        if speed > options.cursor_smear_speed_threshold.max(0.0) {
+                        if speed > live.cursor_smear_speed_threshold.max(0.0) {
                             let shutter_seconds =
-                                (1.0 / fps as f32) * options.cursor_smear_shutter_scale.max(0.0);
-                            let min_len = options.cursor_smear_min_len.max(0.0);
-                            let max_len = options.cursor_smear_max_len.max(min_len);
+                                (1.0 / live.fps.max(1) as f32) * live.cursor_smear_shutter_scale.max(0.0);
+                            let min_len = live.cursor_smear_min_len.max(0.0);
+                            let max_len = live.cursor_smear_max_len.max(min_len);
                             let blur_len = (speed * shutter_seconds).clamp(min_len, max_len);
                             motion_dir_x = vx / speed;
                             motion_dir_y = vy / speed;
-                            let extra_taps = options.cursor_smear_taps.clamp(1, 8) as usize;
-                            let alpha_exp = options.cursor_smear_alpha_exp.max(0.05);
-                            let alpha_scale = options.cursor_smear_alpha_scale.clamp(0.0, 1.0);
+                            let extra_taps = live.cursor_smear_taps.clamp(1, 8) as usize;
+                            let alpha_exp = live.cursor_smear_alpha_exp.max(0.05);
+                            let alpha_scale = live.cursor_smear_alpha_scale.clamp(0.0, 1.0);
                             for i in 1..=extra_taps {
                                 let t = i as f32 / extra_taps as f32;
                                 let alpha =
@@ -453,12 +464,12 @@ pub fn run_capture_session(
                             }
 
                             // Stretch cursor shape along motion axis.
-                            let stretch_threshold = options.cursor_smear_stretch_threshold.max(0.0);
-                            let stretch_range = options.cursor_smear_stretch_range.max(1.0);
+                            let stretch_threshold = live.cursor_smear_stretch_threshold.max(0.0);
+                            let stretch_range = live.cursor_smear_stretch_range.max(1.0);
                             let s = ((speed - stretch_threshold) / stretch_range).clamp(0.0, 1.0);
-                            motion_stretch = 1.0 + options.cursor_smear_max_stretch.max(0.0) * s;
+                            motion_stretch = 1.0 + live.cursor_smear_max_stretch.max(0.0) * s;
                             motion_squash =
-                                1.0 - options.cursor_smear_max_squash.clamp(0.0, 0.95) * s;
+                                1.0 - live.cursor_smear_max_squash.clamp(0.0, 0.95) * s;
                         }
                     }
                 }

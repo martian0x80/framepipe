@@ -1,9 +1,11 @@
+use arc_swap::ArcSwap;
 use drm::Device as BasicDevice;
 use drm::control::Device as ControlDevice;
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::io::{AsFd, BorrowedFd};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct Card(File);
@@ -196,7 +198,7 @@ impl ToString for VideoCodec {
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
 pub enum Profile {
-    Hdr10, // 10 bit (main-10) + bt2020 + P010_10LE format (+ transfer funct
+    Hdr10, // 10 bit (main-10) + bt2020 + P010_10LE format (+ transfer function)
     Hdr,   // default bit depth (main) + bt2020 + NV12 format
     Sdr,   // default bit depth (main) + bt709 + NV12 format
 }
@@ -267,4 +269,129 @@ pub struct CaptureOptions {
     pub mouse_tracking_file: PathBuf,
     pub profile: Option<Profile>,
     pub preview_mailbox: Option<common::types::PreviewMailbox>,
+    /// Live-mutable settings that the recording loop re-reads every frame.
+    /// Only fields that are actually used inside the per-frame loop are included;
+    /// encoder-only and init-time-only fields are intentionally excluded.
+    pub live_settings: Option<LiveSettingsMailbox>,
+}
+
+/// Settings that the GUI can update during a running capture session.
+///
+/// Only fields that are consumed inside the per-frame loop of `recording_loop`
+/// are included here. Encoder parameters, session-init parameters (card path,
+/// output size, etc.) are intentionally excluded because they
+/// cannot take effect without restarting the session.
+// This should probably be in `common` but oh well. 
+#[derive(Debug, Clone)]
+pub struct LiveSettings {
+    pub fps: u32,
+
+    // --- cursor smoothing ---
+    pub cursor_smooth: bool,
+    pub cursor_spring_k: f32,
+    pub cursor_spring_d: f32,
+    pub cursor_max_speed: f32,
+    pub cursor_snap_px: f32,
+    pub cursor_smooth_ms: f32,
+    pub cursor_deadzone_px: f32,
+
+    // --- cursor smear / motion-blur trail ---
+    pub cursor_smear: bool,
+    pub cursor_smear_speed_threshold: f32,
+    pub cursor_smear_shutter_scale: f32,
+    pub cursor_smear_min_len: f32,
+    pub cursor_smear_max_len: f32,
+    pub cursor_smear_taps: u32,
+    pub cursor_smear_alpha_exp: f32,
+    pub cursor_smear_alpha_scale: f32,
+    pub cursor_smear_stretch_threshold: f32,
+    pub cursor_smear_stretch_range: f32,
+    pub cursor_smear_max_stretch: f32,
+    pub cursor_smear_max_squash: f32,
+}
+
+impl Default for LiveSettings {
+    fn default() -> Self {
+        // Mirrors the defaults in CaptureArgs::default().
+        Self {
+            fps: 60,
+            cursor_smooth: false,
+            cursor_spring_k: 120.0,
+            cursor_spring_d: 18.0,
+            cursor_max_speed: 3000.0,
+            cursor_snap_px: 0.0,
+            cursor_smooth_ms: 12.0,
+            cursor_deadzone_px: 0.5,
+            cursor_smear: false,
+            cursor_smear_speed_threshold: 100.0,
+            cursor_smear_shutter_scale: 4.0,
+            cursor_smear_min_len: 4.0,
+            cursor_smear_max_len: 220.0,
+            cursor_smear_taps: 8,
+            cursor_smear_alpha_exp: 1.1,
+            cursor_smear_alpha_scale: 0.4,
+            cursor_smear_stretch_threshold: 300.0,
+            cursor_smear_stretch_range: 1800.0,
+            cursor_smear_max_stretch: 2.0,
+            cursor_smear_max_squash: 0.15,
+        }
+    }
+}
+
+impl LiveSettings {
+    pub fn from_options(opts: &CaptureOptions) -> Self {
+        Self {
+            fps: opts.fps,
+            cursor_smooth: opts.cursor_smooth,
+            cursor_spring_k: opts.cursor_spring_k,
+            cursor_spring_d: opts.cursor_spring_d,
+            cursor_max_speed: opts.cursor_max_speed,
+            cursor_snap_px: opts.cursor_snap_px,
+            cursor_smooth_ms: opts.cursor_smooth_ms,
+            cursor_deadzone_px: opts.cursor_deadzone_px,
+            cursor_smear: opts.cursor_smear,
+            cursor_smear_speed_threshold: opts.cursor_smear_speed_threshold,
+            cursor_smear_shutter_scale: opts.cursor_smear_shutter_scale,
+            cursor_smear_min_len: opts.cursor_smear_min_len,
+            cursor_smear_max_len: opts.cursor_smear_max_len,
+            cursor_smear_taps: opts.cursor_smear_taps,
+            cursor_smear_alpha_exp: opts.cursor_smear_alpha_exp,
+            cursor_smear_alpha_scale: opts.cursor_smear_alpha_scale,
+            cursor_smear_stretch_threshold: opts.cursor_smear_stretch_threshold,
+            cursor_smear_stretch_range: opts.cursor_smear_stretch_range,
+            cursor_smear_max_stretch: opts.cursor_smear_max_stretch,
+            cursor_smear_max_squash: opts.cursor_smear_max_squash,
+        }
+    }
+}
+
+/// Shared handle for live-updating [`LiveSettings`] between the GUI thread
+/// and the capture recording loop.
+#[derive(Debug)]
+pub struct LiveSettingsMailbox {
+    inner: Arc<ArcSwap<LiveSettings>>,
+}
+
+impl LiveSettingsMailbox {
+    pub fn new(initial: LiveSettings) -> Self {
+        Self {
+            inner: Arc::new(ArcSwap::from_pointee(initial)),
+        }
+    }
+
+    pub fn update(&self, settings: LiveSettings) {
+        self.inner.store(Arc::new(settings));
+    }
+
+    pub fn get(&self) -> Arc<LiveSettings> {
+        self.inner.load_full()
+    }
+}
+
+impl Clone for LiveSettingsMailbox {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }

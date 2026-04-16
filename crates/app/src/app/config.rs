@@ -79,5 +79,6 @@ pub fn build_capture_options(
         mouse_tracking_file: PathBuf::from(capture.mouse_tracking_file),
         profile: capture.profile,
         preview_mailbox: None,
+        live_settings: None,
     })
 }

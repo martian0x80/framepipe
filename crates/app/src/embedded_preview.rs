@@ -6,11 +6,12 @@ use eyre::Result;
 use crate::{
     app::{cli::CaptureArgs, config, signals::CaptureControl},
     capture,
-    drm_kms::types::CaptureOutput,
+    drm_kms::types::{CaptureOutput, LiveSettings, LiveSettingsMailbox},
 };
 
 pub struct EmbeddedPreviewSession {
     mailbox: common::types::PreviewMailbox,
+    live_settings: LiveSettingsMailbox,
     control: CaptureControl,
     worker: Option<thread::JoinHandle<Result<()>>>,
 }
@@ -18,6 +19,10 @@ pub struct EmbeddedPreviewSession {
 impl EmbeddedPreviewSession {
     pub fn mailbox(&self) -> common::types::PreviewMailbox {
         self.mailbox.clone()
+    }
+
+    pub fn live_settings(&self) -> LiveSettingsMailbox {
+        self.live_settings.clone()
     }
 
     pub fn stop(&self) {
@@ -47,8 +52,15 @@ impl Drop for EmbeddedPreviewSession {
 pub fn start_embedded_preview(capture: CaptureArgs) -> Result<EmbeddedPreviewSession> {
     let backend = capture.capture_backend;
     let mut options = config::build_capture_options(capture, CaptureOutput::EmbeddedPreview)?;
+
     let mailbox = common::types::PreviewMailbox::new();
     options.preview_mailbox = Some(mailbox.clone());
+
+    // Build an initial LiveSettings snapshot from the resolved options so the
+    // recording loop starts with consistent values even before the GUI sends
+    // its first update.
+    let live_settings = LiveSettingsMailbox::new(LiveSettings::from_options(&options));
+    options.live_settings = Some(live_settings.clone());
 
     let control = CaptureControl::new_unregistered();
     let worker_control = control.clone();
@@ -59,15 +71,13 @@ pub fn start_embedded_preview(capture: CaptureArgs) -> Result<EmbeddedPreviewSes
 
     Ok(EmbeddedPreviewSession {
         mailbox,
+        live_settings,
         control,
         worker: Some(worker),
     })
 }
 
 pub fn start_embedded_preview_default() -> Result<EmbeddedPreviewSession> {
-    let mut args = CaptureArgs::default();
-    // args.fps = 20;
-    // args.output_width = Some(1280);
-    // args.output_height = Some(720);
+    let args = CaptureArgs::default();
     start_embedded_preview(args)
 }

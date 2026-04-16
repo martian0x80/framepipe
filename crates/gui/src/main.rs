@@ -1,22 +1,82 @@
 use std::sync::Arc;
 use std::time::Duration;
 use iced::widget::shader::{self, Pipeline, Primitive, Shader as ShaderWidget};
-use iced::widget::{column, container, text};
+use iced::widget::{column, container, row, text, toggler, slider};
 use iced::{Alignment, Element, Length, Rectangle, Subscription};
 use iced::wgpu;
+
+use framepipe::drm_kms::types::{LiveSettings, LiveSettingsMailbox};
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Tick,
+    FpsChanged(u32),
+    CursorSmoothToggled(bool),
+    CursorSmearToggled(bool),
 }
 
-// #[repr(C)]
-// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-// struct Aspect {
-//     tex: f32,
-//     view: f32,
-//     _pad: [f32; 2],
-// }
+const PREVIEW_WGSL: &str = r#"
+struct VSOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2)
+var<uniform> aspect: vec4<f32>;
+// aspect.x = tex_aspect  (frame width / frame height)
+// aspect.y = view_aspect (widget width / widget height)
+
+@vertex
+fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -3.0),
+        vec2<f32>( 3.0,  1.0),
+        vec2<f32>(-1.0,  1.0),
+    );
+
+    var uvs = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 2.0),
+        vec2<f32>(2.0, 0.0),
+        vec2<f32>(0.0, 0.0),
+    );
+
+    var out: VSOut;
+    out.pos = vec4<f32>(positions[i], 0.0, 1.0);
+    out.uv = uvs[i];
+    return out;
+}
+
+@fragment
+fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+    var uv = in.uv;
+    let tex_aspect = aspect.x;
+    let view_aspect = aspect.y;
+
+    if (view_aspect > tex_aspect) {
+        // View is wider than the texture -> pillarbox (black bars left/right).
+        // Expand the UV-x range so values outside [0,1] are discarded as black.
+        let scale = tex_aspect / view_aspect;   // < 1
+        let new_x = (uv.x - 0.5) / scale + 0.5;
+        if (new_x < 0.0 || new_x > 1.0) {
+            return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        }
+        uv.x = new_x;
+    } else {
+        // View is taller than the texture -> letterbox (black bars top/bottom).
+        let scale = view_aspect / tex_aspect;   // < 1
+        let new_y = (uv.y - 0.5) / scale + 0.5;
+        if (new_y < 0.0 || new_y > 1.0) {
+            return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        }
+        uv.y = new_y;
+    }
+
+    return textureSample(tex, samp, uv);
+}
+"#;
+
 
 #[derive(Clone)]
 pub struct PreviewProgram {
@@ -42,60 +102,6 @@ pub struct PreviewPrimitive {
     frame: Arc<common::types::PreviewFrame>,
 }
 
-const PREVIEW_WGSL: &str = r#"
-struct VSOut {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-
-@group(0) @binding(0) var tex: texture_2d<f32>;
-@group(0) @binding(1) var samp: sampler;
-// @group(0) @binding(2)
-// var<uniform> aspect: vec4<f32>; 
-// x = texture_aspect
-// y = viewport_aspect
-
-@vertex
-fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {
-    var positions = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -3.0),
-        vec2<f32>( 3.0,  1.0),
-        vec2<f32>(-1.0,  1.0),
-    );
-
-    var uvs = array<vec2<f32>, 3>(
-        vec2<f32>(0.0, 2.0),
-        vec2<f32>(2.0, 0.0),
-        vec2<f32>(0.0, 0.0),
-    );
-
-    var out: VSOut;
-    out.pos = vec4<f32>(positions[i], 0.0, 1.0);
-    out.uv = uvs[i];
-    return out;
-}
-
-@fragment
-fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
-    var uv = in.uv;
-
-    // let tex_aspect = aspect.x;
-    // let view_aspect = aspect.y;
-
-    // if (view_aspect > tex_aspect) {
-    //     // pillarbox
-    //     let scale = tex_aspect / view_aspect;
-    //     uv.x = (uv.x - 0.5) * scale + 0.5;
-    // } else {
-    //     // letterbox
-    //     let scale = view_aspect / tex_aspect;
-    //     uv.y = (uv.y - 0.5) * scale + 0.5;
-    // }
-
-    return textureSample(tex, samp, uv);
-}
-"#;
-
 pub struct PreviewPipeline {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -103,9 +109,10 @@ pub struct PreviewPipeline {
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
+    /// Uniform buffer carrying (tex_aspect, view_aspect, pad, pad).
+    aspect_buffer: wgpu::Buffer,
     width: u32,
     height: u32,
-    // aspect_buffer: wgpu::Buffer,
     last_t_ns: u64,
 }
 
@@ -142,10 +149,10 @@ impl PreviewPipeline {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
-                // wgpu::BindGroupEntry {
-                //     binding: 2,
-                //     resource: self.aspect_buffer.as_entire_binding(),
-                // }
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.aspect_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -154,7 +161,6 @@ impl PreviewPipeline {
     }
 }
 
-// here goes tons of boilerplate
 impl Pipeline for PreviewPipeline {
     fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -185,6 +191,13 @@ impl Pipeline for PreviewPipeline {
             ..Default::default()
         });
 
+        let aspect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("preview_aspect_buffer"),
+            size: std::mem::size_of::<[f32; 4]>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("preview_bind_group_layout"),
             entries: &[
@@ -204,25 +217,18 @@ impl Pipeline for PreviewPipeline {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // wgpu::BindGroupLayoutEntry {
-                //     binding: 2,
-                //     visibility: wgpu::ShaderStages::FRAGMENT,
-                //     ty: wgpu::BindingType::Buffer {
-                //         ty: wgpu::BufferBindingType::Uniform,
-                //         has_dynamic_offset: false,
-                //         min_binding_size: None,
-                //     },
-                //     count: None,
-                // }
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
-
-        // let aspect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        //     label: Some("preview_aspect_buffer"),
-        //     size: std::mem::size_of::<[f32; 4]>() as u64,
-        //     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        //     mapped_at_creation: false,
-        // });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("preview_bind_group"),
@@ -236,10 +242,10 @@ impl Pipeline for PreviewPipeline {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
-                // wgpu::BindGroupEntry {
-                //     binding: 2,
-                //     resource: aspect_buffer.as_entire_binding(),
-                // }
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: aspect_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -293,9 +299,9 @@ impl Pipeline for PreviewPipeline {
             bind_group_layout,
             bind_group,
             pipeline,
+            aspect_buffer,
             width: 1,
             height: 1,
-            // aspect_buffer,
             last_t_ns: 0,
         }
     }
@@ -320,13 +326,21 @@ impl Primitive for PreviewPrimitive {
             pipeline.last_t_ns = 0;
         }
 
+        // Write aspect uniforms unconditionally so window resizes are reflected
+        // even when no new frame has arrived (t_ns unchanged).
         let tex_aspect = width as f32 / height as f32;
-        let view_aspect = bounds.width / bounds.height;
-        // let aspect_data = Aspect {
-        //     tex: tex_aspect,
-        //     view: view_aspect,
-        //     _pad: [0.0; 2],
-        // };
+        let view_aspect = if bounds.height > 0.0 {
+            bounds.width / bounds.height
+        } else {
+            tex_aspect
+        };
+        // 16 bytes alignment
+        let aspect_data: [f32; 4] = [tex_aspect, view_aspect, 0.0, 0.0];
+        queue.write_buffer(
+            &pipeline.aspect_buffer,
+            0,
+            bytemuck::cast_slice(&aspect_data),
+        );
 
         if pipeline.last_t_ns != self.frame.t_ns {
             queue.write_texture(
@@ -348,12 +362,6 @@ impl Primitive for PreviewPrimitive {
                     depth_or_array_layers: 1,
                 },
             );
-
-            // queue.write_buffer(
-            //     &pipeline.aspect_buffer,
-            //     0,
-            //     bytemuck::bytes_of(&aspect_data),
-            // );
 
             pipeline.last_t_ns = self.frame.t_ns;
         }
@@ -393,8 +401,10 @@ impl<Message> shader::Program<Message> for PreviewProgram {
 pub struct App {
     _preview_session: Option<framepipe::embedded_preview::EmbeddedPreviewSession>,
     preview_program: Option<PreviewProgram>,
-    height: f32,
-    width: f32,
+    live_settings: Option<LiveSettingsMailbox>,
+    /// GUI-side mirror of the current live settings.  Mutated by update()
+    /// and published to the recording loop via live_settings.update().
+    current_live: LiveSettings,
     status: String,
 }
 
@@ -405,35 +415,49 @@ impl App {
         match framepipe::embedded_preview::start_embedded_preview_default() {
             Ok(session) => {
                 let preview_mailbox = session.mailbox();
+                let live_settings = session.live_settings();
+                let current_live = live_settings.get().as_ref().clone();
                 Self {
                     _preview_session: Some(session),
                     preview_program: Some(PreviewProgram::new(preview_mailbox)),
+                    live_settings: Some(live_settings),
+                    current_live,
                     status: "Embedded preview started".to_string(),
-                    height: 1.0,
-                    width: 1.0,
                 }
             }
             Err(e) => Self {
                 _preview_session: None,
                 preview_program: None,
+                live_settings: None,
+                current_live: LiveSettings::default(),
                 status: format!("Failed to start embedded preview: {e}"),
-                height: 1.0,
-                width: 1.0,
             },
+        }
+    }
+
+    fn push_live_settings(&self) {
+        if let Some(mb) = &self.live_settings {
+            mb.update(self.current_live.clone());
         }
     }
 
     fn update(&mut self, message: Message) {
         match message {
             Message::Tick => {
-                if let Some(program) = &self.preview_program {
-                    if let Some(frame) = program.latest.get_frame() {
-                        if frame.t_ns != 0 {
-                            self.width = frame.width as f32;
-                            self.height = frame.height as f32;
-                        }
-                    }
-                }
+                // Nothing to do on tick — the shader program reads the mailbox
+                // directly via PreviewMailbox.
+            }
+            Message::FpsChanged(fps) => {
+                self.current_live.fps = fps.clamp(1, 240);
+                self.push_live_settings();
+            }
+            Message::CursorSmoothToggled(enabled) => {
+                self.current_live.cursor_smooth = enabled;
+                self.push_live_settings();
+            }
+            Message::CursorSmearToggled(enabled) => {
+                self.current_live.cursor_smear = enabled;
+                self.push_live_settings();
             }
         }
     }
@@ -445,8 +469,8 @@ impl App {
     fn view(&self) -> Element<'_, Message> {
         let preview: Element<'_, Message> = if let Some(program) = &self.preview_program {
             ShaderWidget::new(program.clone())
-                .width(Length::Fixed(self.width))
-                .height(Length::Fixed(self.height))
+                .width(Length::Fill)
+                .height(Length::Fill)
                 .into()
         } else {
             container(text("No preview available"))
@@ -455,19 +479,35 @@ impl App {
                 .into()
         };
 
-        let backend_dropdown = iced::widget::pick_list(
-            [
-                framepipe::capture::types::CaptureBackendKind::DrmKms,
-                framepipe::capture::types::CaptureBackendKind::PipewirePortal,
-            ],
-            Some(framepipe::capture::types::CaptureBackendKind::DrmKms),
-            |_| Message::Tick,
-        );
+        let fps_label = text(format!("FPS: {}", self.current_live.fps));
+        let fps_slider = slider(1..=240, self.current_live.fps, Message::FpsChanged)
+            .width(Length::Fixed(200.0));
+
+        let smooth_toggle = toggler(self.current_live.cursor_smooth)
+            .label("Cursor Smooth")
+            .on_toggle(Message::CursorSmoothToggled);
+
+        let smear_toggle = toggler(self.current_live.cursor_smear)
+            .label("Cursor Smear")
+            .on_toggle(Message::CursorSmearToggled);
+
+        let settings_row = row![
+            fps_label,
+            fps_slider,
+            smooth_toggle,
+            smear_toggle,
+        ]
+        .spacing(16)
+        .align_y(Alignment::Center);
 
         container(
-            column![text(&self.status), backend_dropdown, preview]
-                .align_x(Alignment::Start)
-                .spacing(8),
+            column![
+                text(&self.status),
+                settings_row,
+                preview,
+            ]
+            .align_x(Alignment::Start)
+            .spacing(8),
         )
         .width(Length::Fill)
         .height(Length::Fill)
