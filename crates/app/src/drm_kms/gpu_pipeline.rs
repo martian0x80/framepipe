@@ -186,6 +186,10 @@ impl GpuPipeline {
             in vec2 v_uv;
             uniform sampler2D u_src;
             uniform sampler2D u_cursor;
+            uniform sampler2D u_bg;
+            uniform int u_bg_enabled;
+            uniform float u_frame_zoom;
+            uniform vec2 u_frame_offset;
             uniform int u_cursor_tap_count;
             uniform vec3 u_cursor_taps[8]; // x,y,alpha in output pixel space
             uniform vec2 u_cursor_size_px; // w,h
@@ -197,13 +201,25 @@ impl GpuPipeline {
 
             void main() {
                 vec2 uv = v_uv;
-                vec4 base = texture(u_src, uv);
-                vec2 p = uv * u_out_size; // output pixel space
 
-                for (int i = 0; i < 8; i++) {
-                    if (i >= u_cursor_tap_count) {
-                        break;
+                // --- background / frame-zoom compositing ---
+                vec4 base;
+                if (u_bg_enabled == 1) {
+                    vec2 frame_uv = (uv - u_frame_offset) / u_frame_zoom;
+                    if (frame_uv.x >= 0.0 && frame_uv.x <= 1.0
+                            && frame_uv.y >= 0.0 && frame_uv.y <= 1.0) {
+                        base = texture(u_src, frame_uv);
+                    } else {
+                        base = texture(u_bg, uv);
                     }
+                } else {
+                    base = texture(u_src, uv);
+                }
+
+                // --- cursor compositing ---
+                vec2 p = uv * u_out_size;
+                for (int i = 0; i < 8; i++) {
+                    if (i >= u_cursor_tap_count) { break; }
                     vec2 cmin = u_cursor_taps[i].xy;
                     vec2 cmax = cmin + u_cursor_size_px;
                     if (p.x >= cmin.x && p.y >= cmin.y && p.x < cmax.x && p.y < cmax.y) {
@@ -232,6 +248,10 @@ impl GpuPipeline {
             in vec2 v_uv;
             uniform samplerExternalOES u_src;
             uniform sampler2D u_cursor;
+            uniform sampler2D u_bg;
+            uniform int u_bg_enabled;
+            uniform float u_frame_zoom;
+            uniform vec2 u_frame_offset;
             uniform int u_cursor_tap_count;
             uniform vec3 u_cursor_taps[8]; // x,y,alpha in output pixel space
             uniform vec2 u_cursor_size_px; // w,h
@@ -243,13 +263,25 @@ impl GpuPipeline {
 
             void main() {
                 vec2 uv = v_uv;
-                vec4 base = texture(u_src, uv);
-                vec2 p = uv * u_out_size; // output pixel space
 
-                for (int i = 0; i < 8; i++) {
-                    if (i >= u_cursor_tap_count) {
-                        break;
+                // --- background / frame-zoom compositing ---
+                vec4 base;
+                if (u_bg_enabled == 1) {
+                    vec2 frame_uv = (uv - u_frame_offset) / u_frame_zoom;
+                    if (frame_uv.x >= 0.0 && frame_uv.x <= 1.0
+                            && frame_uv.y >= 0.0 && frame_uv.y <= 1.0) {
+                        base = texture(u_src, frame_uv);
+                    } else {
+                        base = texture(u_bg, uv);
                     }
+                } else {
+                    base = texture(u_src, uv);
+                }
+
+                // --- cursor compositing ---
+                vec2 p = uv * u_out_size;
+                for (int i = 0; i < 8; i++) {
+                    if (i >= u_cursor_tap_count) { break; }
                     vec2 cmin = u_cursor_taps[i].xy;
                     vec2 cmax = cmin + u_cursor_size_px;
                     if (p.x >= cmin.x && p.y >= cmin.y && p.x < cmax.x && p.y < cmax.y) {
@@ -391,14 +423,20 @@ impl GpuPipeline {
         }
     }
 
-    // 1) render source texture -> encoder input target (RGBA here)
-    // 2) cursor blend in same pass
-    // 3) insert GL fence
+    /// Renders `src_tex` into the pipeline's output FBO, compositing the
+    /// background and cursor in a single pass, then inserts a GL fence.
+    ///
+    /// * `bg_tex` => when `Some`, the background texture is composited behind
+    ///   the (zoomed) source frame.  Pass `None` for no background.
+    /// * `frame_zoom` => scale factor for the source frame [0.1, 1.0].  The
+    ///   frame is centered in the output.  Pass `1.0` for no zoom.
     pub unsafe fn render_with_cursor(
         &self,
         src_tex: glow::NativeTexture,
         use_external_texture: bool,
         cursor: &CursorState,
+        bg_tex: Option<glow::NativeTexture>,
+        frame_zoom: f32,
     ) -> Result<glow::NativeFence, String> {
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
@@ -496,6 +534,32 @@ impl GpuPipeline {
                 self.gl.uniform_1_i32(
                     self.gl.get_uniform_location(program, "u_cursor").as_ref(),
                     1,
+                );
+            }
+
+            let zoom = frame_zoom.clamp(0.1, 1.0);
+            let use_bg = bg_tex.is_some() as i32;
+            self.gl.uniform_1_i32(
+                self.gl.get_uniform_location(program, "u_bg_enabled").as_ref(),
+                use_bg,
+            );
+            self.gl.uniform_1_f32(
+                self.gl.get_uniform_location(program, "u_frame_zoom").as_ref(),
+                zoom,
+            );
+            // Center the shrunken frame: offset = (1 - zoom) / 2 on each axis.
+            let offset = (1.0 - zoom) * 0.5;
+            self.gl.uniform_2_f32(
+                self.gl.get_uniform_location(program, "u_frame_offset").as_ref(),
+                offset,
+                offset,
+            );
+            if let Some(bgtex) = bg_tex {
+                self.gl.active_texture(glow::TEXTURE2);
+                self.gl.bind_texture(glow::TEXTURE_2D, Some(bgtex));
+                self.gl.uniform_1_i32(
+                    self.gl.get_uniform_location(program, "u_bg").as_ref(),
+                    2,
                 );
             }
 

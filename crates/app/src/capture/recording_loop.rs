@@ -187,7 +187,7 @@ pub fn run_capture_session(
     let (cursor_tex, cursor_w, cursor_h, hotspot_x, hotspot_y) = if options.cursor_composition {
         let (tex, base_w, base_h, auto_hotspot) =
             if let Some(sprite_path) = options.cursor_sprite.as_ref() {
-                let (tex, w, h) = create_cursor_texture_from_png(&pipelines[0].gl, sprite_path)
+                let (tex, w, h) = load_rgba_texture(&pipelines[0].gl, sprite_path)
                     .map_err(EglError::Pipeline)?;
                 // Large cursor atlases are commonly centered with transparent borders.
                 // let auto_hotspot = if options.cursor_hotspot_x == 0 && options.cursor_hotspot_y == 0 {
@@ -229,6 +229,8 @@ pub fn run_capture_session(
     } else {
         (None, 0.0, 0.0, 0.0, 0.0)
     };
+    // Allow live-reloading the cursor sprite and hotspot via LiveSettings.
+    let (mut cursor_tex, mut cursor_w, mut cursor_h) = (cursor_tex, cursor_w, cursor_h);
 
     let first_slot = 0usize;
     let fence = unsafe {
@@ -236,6 +238,8 @@ pub fn run_capture_session(
             NativeTexture(NonZero::new(texture).unwrap()),
             first_use_external_texture,
             &cursor_state_empty,
+            None,  // no background yet
+            1.0,   // no frame zoom
         )
     }
     .map_err(EglError::Pipeline)?;
@@ -322,6 +326,15 @@ pub fn run_capture_session(
     let _ = delete_gl_texture(&egl, texture);
     frame_idx += 1;
 
+    // Version counters for live-reloadable assets.  Using u64::MAX as the initial
+    // sentinel guarantees the first frame always triggers a load, which correctly
+    // handles both the CLI case (initial --background / --cursor-sprite from
+    // CaptureOptions) and the GUI case (mailbox provides the real version 0).
+    let mut last_cursor_sprite_version: u64 = u64::MAX;
+    let mut last_bg_version: u64 = u64::MAX;
+    // Background texture handle (None until a path is resolved on first frame).
+    let mut live_bg_tex: Option<glow::NativeTexture> = None;
+
     while !control.stop_requested.load(Ordering::Relaxed) {
         // Snapshot live-mutable settings once at the top of each iteration.
         let live: std::sync::Arc<LiveSettings> = options
@@ -332,6 +345,52 @@ pub fn run_capture_session(
 
         // Recompute frame period from the live fps
         let frame_period = Duration::from_nanos(1_000_000_000u64 / live.fps.max(1) as u64);
+
+        if cursor_tex.is_some() && live.cursor_sprite_version != last_cursor_sprite_version {
+            if let Some(old_tex) = cursor_tex.take() {
+                let _ = delete_gl_texture(&egl, old_tex.0.into());
+            }
+            let scale = options.cursor_scale.max(0.1);
+            let result = match live.cursor_sprite.as_deref() {
+                Some(path) => load_rgba_texture(&pipelines[0].gl, path)
+                    .map(|(t, w, h)| (Some(t), w * scale, h * scale)),
+                None => create_default_cursor_texture(&pipelines[0].gl)
+                    .map(|t| (Some(t), 24.0 * scale, 24.0 * scale)),
+            };
+            match result {
+                Ok((t, w, h)) => {
+                    cursor_tex = t;
+                    cursor_w = w;
+                    cursor_h = h;
+                    log::info!(
+                        "Live cursor sprite reloaded: {:?} ({}x{})",
+                        live.cursor_sprite.as_deref().unwrap_or(std::path::Path::new("<default>")),
+                        w, h
+                    );
+                }
+                Err(e) => log::warn!("Failed to reload cursor sprite: {}", e),
+            }
+            last_cursor_sprite_version = live.cursor_sprite_version;
+        }
+
+        if live.background_version != last_bg_version {
+            if let Some(old_bg) = live_bg_tex.take() {
+                let _ = delete_gl_texture(&egl, old_bg.0.into());
+            }
+            live_bg_tex = live.background.as_deref().and_then(|path| {
+                match load_rgba_texture(&pipelines[0].gl, path) {
+                    Ok((t, _, _)) => {
+                        log::info!("Background image loaded: {}", path.display());
+                        Some(t)
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to load background {}: {}", path.display(), e);
+                        None
+                    }
+                }
+            });
+            last_bg_version = live.background_version;
+        }
         if control.pause_req.swap(false, Ordering::Relaxed) {
             control.paused.store(true, Ordering::Relaxed);
             log::info!("Recording paused (SIGUSR1)");
@@ -475,6 +534,19 @@ pub fn run_capture_session(
                 }
                 last_cursor_sample = Some((s_cursor_x, s_cursor_y, now));
 
+                // Apply background-zoom transform to all tap coordinates so the
+                // cursor tracks the shrunken frame rather than the full output.
+                let taps = if live.background_enabled && live.background_zoom < 1.0 {
+                    let zoom = live.background_zoom.clamp(0.1, 1.0);
+                    let off_x = output_w as f32 * (1.0 - zoom) * 0.5;
+                    let off_y = output_h as f32 * (1.0 - zoom) * 0.5;
+                    taps.into_iter()
+                        .map(|[x, y, a]| [x * zoom + off_x, y * zoom + off_y, a])
+                        .collect()
+                } else {
+                    taps
+                };
+
                 gpu_pipeline::CursorState::with_blur_samples(
                     *ctex,
                     cursor_w,
@@ -493,11 +565,15 @@ pub fn run_capture_session(
         };
 
         let slot = (frame_idx as usize) % pipelines.len();
+        let bg = if live.background_enabled { live_bg_tex } else { None };
+        let zoom = if live.background_enabled { live.background_zoom.clamp(0.1, 1.0) } else { 1.0 };
         let fence = unsafe {
             pipelines[slot].render_with_cursor(
                 NativeTexture(NonZero::new(frame_texture).unwrap()),
                 use_external_texture,
                 &cursor_state,
+                bg,
+                zoom,
             )
         }
         .map_err(EglError::Pipeline)?;
@@ -609,6 +685,10 @@ pub fn run_capture_session(
     if let Some(ctex) = cursor_tex {
         delete_gl_texture(&egl, ctex.0.into())
             .map_err(|e| EglError::Pipeline(format!("failed to delete cursor texture: {e}")))?;
+    }
+    if let Some(bg_tex) = live_bg_tex {
+        delete_gl_texture(&egl, bg_tex.0.into())
+            .map_err(|e| EglError::Pipeline(format!("failed to delete background texture: {e}")))?;
     }
 
     if let Some(enc) = encoder {

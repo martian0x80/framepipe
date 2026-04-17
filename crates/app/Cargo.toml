@@ -22,7 +22,7 @@ khronos-egl = { workspace = true }
 libc = { workspace = true }
 log = { workspace = true }
 input = "0.9.1"
-image = { version = "0.25.8", default-features = false, features = ["png"] }
+image = { version = "0.25.8", default-features = false, features = ["png", "jpeg"] }
 serde = { workspace = true }
 signal-hook = "0.3.17"
 smithay-client-toolkit = "0.20.0"

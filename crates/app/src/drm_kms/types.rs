@@ -268,6 +268,11 @@ pub struct CaptureOptions {
     pub wayland_sync_frequency: f64,
     pub mouse_tracking_file: PathBuf,
     pub profile: Option<Profile>,
+    /// Background image path for frame compositing.  When `Some`, the source
+    /// frame is scaled to `background_zoom` and composited on top of this image.
+    pub background: Option<PathBuf>,
+    /// Scale factor [0.1, 1.0] for the source frame when background is active.
+    pub background_zoom: f32,
     pub preview_mailbox: Option<common::types::PreviewMailbox>,
     /// Live-mutable settings that the recording loop re-reads every frame.
     /// Only fields that are actually used inside the per-frame loop are included;
@@ -308,6 +313,25 @@ pub struct LiveSettings {
     pub cursor_smear_stretch_range: f32,
     pub cursor_smear_max_stretch: f32,
     pub cursor_smear_max_squash: f32,
+
+    // --- cursor sprite ---
+    /// Path to cursor sprite PNG.  `None` = use the built-in default shape.
+    pub cursor_sprite: Option<PathBuf>,
+    /// Bumped by the GUI whenever the sprite path changes.  The recording loop
+    /// compares this against a local `last_cursor_sprite_version` and rebuilds
+    /// the GL texture exactly once on mismatch.
+    pub cursor_sprite_version: u64,
+
+    // --- background compositing ---
+    /// Path to a background PNG.  `None` = no background.
+    pub background: Option<PathBuf>,
+    /// Bumped by the GUI whenever the background path changes.
+    pub background_version: u64,
+    /// Whether to composite the background behind the (zoomed) source frame.
+    pub background_enabled: bool,
+    /// Uniform scale applied to the source frame when background is enabled.
+    /// 1.0 = fills output completely, 0.85 = leaves a visible border all around.
+    pub background_zoom: f32,
 }
 
 impl Default for LiveSettings {
@@ -334,6 +358,12 @@ impl Default for LiveSettings {
             cursor_smear_stretch_range: 1800.0,
             cursor_smear_max_stretch: 2.0,
             cursor_smear_max_squash: 0.15,
+            cursor_sprite: None,
+            cursor_sprite_version: 0,
+            background: None,
+            background_version: 0,
+            background_enabled: false,
+            background_zoom: 0.85,
         }
     }
 }
@@ -361,6 +391,13 @@ impl LiveSettings {
             cursor_smear_stretch_range: opts.cursor_smear_stretch_range,
             cursor_smear_max_stretch: opts.cursor_smear_max_stretch,
             cursor_smear_max_squash: opts.cursor_smear_max_squash,
+            // Seed from options so the first version matches the already-loaded texture.
+            cursor_sprite: opts.cursor_sprite.clone(),
+            cursor_sprite_version: 0,
+            background: opts.background.clone(),
+            background_version: 0,
+            background_enabled: opts.background.is_some(),
+            background_zoom: opts.background_zoom.clamp(0.1, 1.0),
         }
     }
 }

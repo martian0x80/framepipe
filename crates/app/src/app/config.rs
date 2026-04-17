@@ -78,6 +78,8 @@ pub fn build_capture_options(
         wayland_sync_frequency: capture.wayland_sync_frequency,
         mouse_tracking_file: PathBuf::from(capture.mouse_tracking_file),
         profile: capture.profile,
+        background: capture.background,
+        background_zoom: capture.background_zoom.clamp(0.1, 1.0),
         preview_mailbox: None,
         live_settings: None,
     })

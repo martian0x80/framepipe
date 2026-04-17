@@ -216,6 +216,17 @@ pub struct CaptureArgs {
     pub mouse_tracking_file: String,
     #[arg(long, help = "Capture profile (hdr10, hdr, sdr)")]
     pub profile: Option<Profile>,
+    #[arg(
+        long,
+        help = "PNG image to composite as background behind the (zoomed) frame"
+    )]
+    pub background: Option<PathBuf>,
+    #[arg(
+        long = "background-zoom",
+        default_value_t = 0.85,
+        help = "Uniform scale applied to the source frame when --background is set [0.1, 1.0]"
+    )]
+    pub background_zoom: f32,
 }
 
 impl Default for CaptureArgs {
@@ -267,6 +278,8 @@ impl Default for CaptureArgs {
             wayland_sync_frequency: 0.5,
             mouse_tracking_file: "openstudio-cursor.bitcode".to_string(),
             profile: None,
+            background: None,
+            background_zoom: 0.85,
         }
     }
 }
