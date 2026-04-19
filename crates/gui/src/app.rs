@@ -264,7 +264,7 @@ impl App {
     }
 
     fn start_preview_session(&mut self) {
-        self.stop_preview_session();
+        // self.stop_preview_session();
         match framepipe::embedded_preview::start_embedded_preview(self.build_capture_args()) {
             Ok(session) => {
                 let preview_mailbox = session.mailbox();
@@ -311,6 +311,7 @@ impl App {
                 Task::none()
             }
             Message::RestartPreview => {
+                // self.stop_preview_session();
                 if matches!(self.mode, AppMode::Preview) || matches!(self.mode, AppMode::Idle) {
                     self.start_preview_session();
                 }

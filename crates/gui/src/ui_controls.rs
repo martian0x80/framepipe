@@ -509,7 +509,7 @@ impl App {
         container(scrollable(controls))
             .padding(12)
             .style(iced::widget::container::rounded_box)
-            .width(Length::FillPortion(35))
+            .width(Length::FillPortion(2))
             .max_width(560)
             .into()
     }

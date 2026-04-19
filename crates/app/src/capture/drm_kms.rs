@@ -77,6 +77,7 @@ impl CaptureBackend for DrmKmsBackend {
 
     fn stop(&mut self) -> Result<(), EglError> {
         self.probe = None;
+        drop(self.privd.take());
         self.privd = None;
         Ok(())
     }

@@ -119,6 +119,8 @@ impl CaptureBackend for PipeWirePortalBackend {
         if let Some(producer) = self.producer.take() {
             producer.stop();
         }
+        drop(self.privd.take());
+        self.privd = None;
         self.ring = None;
         self.last_frame = None;
         Ok(())

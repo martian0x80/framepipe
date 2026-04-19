@@ -16,7 +16,7 @@ impl App {
                 .align_x(Alignment::Center)
                 .spacing(8),
             )
-            .width(Length::FillPortion(65))
+            .width(Length::FillPortion(4))
             .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
@@ -34,7 +34,7 @@ impl App {
                 .align_x(Alignment::Center)
                 .spacing(8),
             )
-            .width(Length::FillPortion(65))
+            .width(Length::FillPortion(3))
             .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
@@ -54,7 +54,7 @@ impl App {
                     .align_x(Alignment::Center)
                     .spacing(8),
             )
-            .width(Length::FillPortion(65))
+            .width(Length::FillPortion(3))
             .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
@@ -68,14 +68,14 @@ impl App {
                     .width(Length::Fill)
                     .height(Length::Fill),
             )
-            .width(Length::FillPortion(65))
+            .width(Length::FillPortion(4))
             .height(Length::Fill)
             .style(iced::widget::container::rounded_box)
             .into();
         }
 
         container(text("Preview unavailable"))
-            .width(Length::FillPortion(65))
+            .width(Length::FillPortion(4))
             .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
@@ -93,7 +93,7 @@ impl App {
                     .width(Length::Fill)
                     .height(Length::Fill),
             ]
-            .spacing(10)
+            // .spacing(10)
             .padding(12),
         )
         .width(Length::Fill)
