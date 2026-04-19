@@ -79,7 +79,7 @@ pub fn build_capture_options(
         mouse_tracking_file: PathBuf::from(capture.mouse_tracking_file),
         profile: capture.profile,
         background: capture.background,
-        background_zoom: capture.background_zoom.clamp(0.1, 1.0),
+        background_zoom: capture.background_zoom.clamp(1.0, 100.0),
         preview_mailbox: None,
         live_settings: None,
     })

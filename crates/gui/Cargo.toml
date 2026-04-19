@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = { version = "0.14.0", features = ["advanced", "image", "tokio"] }
+iced = { version = "0.14.0", features = ["advanced", "debug", "tokio"] }
 wgpu = "29.0.1"
 framepipe = { path = "../app" }
 common = { path = "../common" }
 env_logger = "0.11.9"
 log = { workspace = true }
 bytemuck = "1.25.0"
+rfd = { version = "0.15.4", default-features = false, features = ["xdg-portal", "tokio"] }

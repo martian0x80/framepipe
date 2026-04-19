@@ -321,6 +321,7 @@ pub struct LiveSettings {
     /// compares this against a local `last_cursor_sprite_version` and rebuilds
     /// the GL texture exactly once on mismatch.
     pub cursor_sprite_version: u64,
+    pub cursor_scale: f32,
 
     // --- background compositing ---
     /// Path to a background PNG.  `None` = no background.
@@ -360,10 +361,11 @@ impl Default for LiveSettings {
             cursor_smear_max_squash: 0.15,
             cursor_sprite: None,
             cursor_sprite_version: 0,
+            cursor_scale: 50.0,
             background: None,
             background_version: 0,
             background_enabled: false,
-            background_zoom: 0.85,
+            background_zoom: 85.0,
         }
     }
 }
@@ -394,10 +396,11 @@ impl LiveSettings {
             // Seed from options so the first version matches the already-loaded texture.
             cursor_sprite: opts.cursor_sprite.clone(),
             cursor_sprite_version: 0,
+            cursor_scale: opts.cursor_scale.clamp(1.0, 100.0),
             background: opts.background.clone(),
             background_version: 0,
             background_enabled: opts.background.is_some(),
-            background_zoom: opts.background_zoom.clamp(0.1, 1.0),
+            background_zoom: opts.background_zoom.clamp(1.0, 100.0),
         }
     }
 }

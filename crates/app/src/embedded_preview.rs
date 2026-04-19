@@ -62,7 +62,8 @@ pub fn start_embedded_preview(capture: CaptureArgs) -> Result<EmbeddedPreviewSes
     let live_settings = LiveSettingsMailbox::new(LiveSettings::from_options(&options));
     options.live_settings = Some(live_settings.clone());
 
-    let control = CaptureControl::new_unregistered();
+    let control = CaptureControl::register().unwrap();
+    
     let worker_control = control.clone();
     let worker = thread::spawn(move || {
         capture::capture::run_capture_session(options, worker_control, backend)

@@ -1,10 +1,6 @@
 use glow::{HasContext, NativeTexture};
 use std::{
-    fs,
-    num::NonZero,
-    sync::{Arc, atomic::Ordering},
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    fs, num::NonZero, ops::Div as _, path::Path, sync::{Arc, atomic::Ordering}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
 };
 
 use crate::{app::signals::CaptureControl, drm_kms::types::Profile};
@@ -209,7 +205,7 @@ pub fn run_capture_session(
                 (tex, 24.0_f32, 24.0_f32, None)
             };
 
-        let scale = options.cursor_scale.max(0.1);
+        let scale = options.cursor_scale.clamp(1.0, 100.0).div(100.0);
         let out_w = base_w * scale;
         let out_h = base_h * scale;
         let (hotspot_x, hotspot_y) = if let Some((ax, ay)) = auto_hotspot {
@@ -350,12 +346,13 @@ pub fn run_capture_session(
             if let Some(old_tex) = cursor_tex.take() {
                 let _ = delete_gl_texture(&egl, old_tex.0.into());
             }
-            let scale = options.cursor_scale.max(0.1);
+            // todo: allow 3x scale for custom cursors
+            let scale = live.cursor_scale.clamp(1.0, 100.0).div(100.0);
             let result = match live.cursor_sprite.as_deref() {
                 Some(path) => load_rgba_texture(&pipelines[0].gl, path)
                     .map(|(t, w, h)| (Some(t), w * scale, h * scale)),
-                None => create_default_cursor_texture(&pipelines[0].gl)
-                    .map(|t| (Some(t), 24.0 * scale, 24.0 * scale)),
+                None => load_rgba_texture(&pipelines[0].gl, Path::new("assets/default_dark.png"))
+                    .map(|(t, w, h)| (Some(t), w * 2.0 * scale, h * 2.0 * scale)),
             };
             match result {
                 Ok((t, w, h)) => {
@@ -536,8 +533,8 @@ pub fn run_capture_session(
 
                 // Apply background-zoom transform to all tap coordinates so the
                 // cursor tracks the shrunken frame rather than the full output.
-                let taps = if live.background_enabled && live.background_zoom < 1.0 {
-                    let zoom = live.background_zoom.clamp(0.1, 1.0);
+                let taps = if live.background_enabled && live.background_zoom < 100.0 {
+                    let zoom = live.background_zoom.clamp(1.0, 100.0).div(100.0);
                     let off_x = output_w as f32 * (1.0 - zoom) * 0.5;
                     let off_y = output_h as f32 * (1.0 - zoom) * 0.5;
                     taps.into_iter()
@@ -566,7 +563,7 @@ pub fn run_capture_session(
 
         let slot = (frame_idx as usize) % pipelines.len();
         let bg = if live.background_enabled { live_bg_tex } else { None };
-        let zoom = if live.background_enabled { live.background_zoom.clamp(0.1, 1.0) } else { 1.0 };
+        let zoom = if live.background_enabled { live.background_zoom.clamp(1.0, 100.0).div(100.0) } else { 1.0 };
         let fence = unsafe {
             pipelines[slot].render_with_cursor(
                 NativeTexture(NonZero::new(frame_texture).unwrap()),

@@ -90,7 +90,7 @@ pub struct CaptureArgs {
     pub cursor_hotspot_x: i32,
     #[arg(long, default_value_t = 0, help = "Cursor hotspot Y in sprite pixels")]
     pub cursor_hotspot_y: i32,
-    #[arg(long, default_value_t = 1.0, help = "Cursor sprite scale factor")]
+    #[arg(long, default_value_t = 50.0, help = "Cursor sprite scale as percentage [1.0, 100.0]")]
     pub cursor_scale: f32,
     #[arg(long, default_value_t = false, help = "Enable cursor smoothing")]
     pub cursor_smooth: bool,
@@ -255,7 +255,7 @@ impl Default for CaptureArgs {
             cursor_sprite: None,
             cursor_hotspot_x: 0,
             cursor_hotspot_y: 0,
-            cursor_scale: 1.0,
+            cursor_scale: 50.0,
             cursor_smooth: false,
             cursor_smear: false,
             cursor_spring_k: 120.0,
@@ -279,7 +279,7 @@ impl Default for CaptureArgs {
             mouse_tracking_file: "openstudio-cursor.bitcode".to_string(),
             profile: None,
             background: None,
-            background_zoom: 0.85,
+            background_zoom: 85.0,
         }
     }
 }
