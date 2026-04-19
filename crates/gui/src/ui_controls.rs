@@ -313,6 +313,7 @@ impl App {
                         row![
                             text("Smear shutter"),
                             slider(0.1..=10.0, self.live.cursor_smear_shutter_scale, Message::CursorSmearShutterScaleChanged)
+                                .step(0.1)
                                 .width(Length::Fill),
                             text(format!("{:.2}", self.live.cursor_smear_shutter_scale)).width(Length::Fixed(56.0)),
                         ]
@@ -338,6 +339,7 @@ impl App {
                         row![
                             text("Alpha exp"),
                             slider(0.1..=4.0, self.live.cursor_smear_alpha_exp, Message::CursorSmearAlphaExpChanged)
+                                .step(0.1)
                                 .width(Length::Fill),
                             text(format!("{:.2}", self.live.cursor_smear_alpha_exp)).width(Length::Fixed(56.0)),
                         ]
@@ -346,6 +348,7 @@ impl App {
                         row![
                             text("Alpha scale"),
                             slider(0.01..=2.0, self.live.cursor_smear_alpha_scale, Message::CursorSmearAlphaScaleChanged)
+                                .step(0.01)
                                 .width(Length::Fill),
                             text(format!("{:.2}", self.live.cursor_smear_alpha_scale)).width(Length::Fixed(56.0)),
                         ]
@@ -378,6 +381,7 @@ impl App {
                         row![
                             text("Max squash"),
                             slider(0.0..=0.95, self.live.cursor_smear_max_squash, Message::CursorSmearMaxSquashChanged)
+                                .step(0.01)
                                 .width(Length::Fill),
                             text(format!("{:.2}", self.live.cursor_smear_max_squash)).width(Length::Fixed(56.0)),
                         ]
