@@ -93,7 +93,7 @@ impl App {
                     .width(Length::Fill)
                     .height(Length::Fill),
             ]
-            // .spacing(10)
+            .spacing(10)
             .padding(12),
         )
         .width(Length::Fill)

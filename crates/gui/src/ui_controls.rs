@@ -1,17 +1,35 @@
+use iced::widget::scrollable::Scrollbar;
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
 };
 use iced::{Alignment, Element, Length};
-
 use crate::app::{App, Message};
 use crate::model::{
     BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
     FrameRateModeChoice, ProfileChoice, QualityChoice, SourceChoice,
 };
+use crate::theme::get_all_themes;
 
 impl App {
     fn section_heading(title: &str) -> iced::widget::Text<'_> {
         text(title).size(22)
+    }
+
+    fn inset_divider() -> Element<'static, Message> {
+        container(
+            container("")
+                .height(Length::Fixed(2.0))
+                .width(Length::Fill)
+                .style(|theme: &iced::Theme| {
+                    let p = theme.extended_palette();
+                    container::Style {
+                        background: Some(p.secondary.strong.color.into()),
+                        ..Default::default()
+                    }
+                })
+        )
+        .padding([4, 6])
+        .into()
     }
 
     fn action_buttons(&self) -> Element<'_, Message> {
@@ -81,6 +99,7 @@ impl App {
             ]
             .spacing(8)
             .align_y(Alignment::Center),
+            Self::inset_divider(),
             Self::section_heading("Encoding"),
             row![
                 text("Quality"),
@@ -171,6 +190,7 @@ impl App {
             );
         }
 
+        controls = controls.push(Self::inset_divider());
         controls = controls.push(Self::section_heading("Cursor"));
         controls = controls.push(
             row![
@@ -228,6 +248,9 @@ impl App {
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
+            );
+            controls = controls.push(
+                Self::inset_divider()
             );
             controls = controls.push(
                 Self::section_heading("Live Effects"),
@@ -482,6 +505,7 @@ impl App {
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
+                Self::inset_divider(),
                 Self::section_heading("Debug"),
                 toggler(self.fixed.dump_frames)
                     .label("Dump frames")
@@ -504,13 +528,20 @@ impl App {
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
+                Self::inset_divider(),
+                Self::section_heading("Theme"),
+                pick_list(
+                    get_all_themes(),
+                    self.theme.clone(),
+                    Message::ThemeChanged
+                )
             ]
             .spacing(8);
 
             controls = controls.push(advanced);
         }
 
-        container(scrollable(controls))
+        container(scrollable::Scrollable::with_direction(controls, scrollable::Direction::Vertical(Scrollbar::hidden())).auto_scroll(true))
             .padding(12)
             .style(iced::widget::container::rounded_box)
             .width(Length::FillPortion(2))

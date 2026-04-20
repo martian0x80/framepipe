@@ -11,4 +11,5 @@ common = { path = "../common" }
 env_logger = "0.11.9"
 log = { workspace = true }
 bytemuck = "1.25.0"
-rfd = { version = "0.15.4", default-features = false, features = ["xdg-portal", "tokio"] }
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+clap = { workspace = true, features = ["derive"] }

@@ -8,7 +8,7 @@ mod ui;
 use framepipe::app::cli::CaptureArgs;
 use framepipe::drm_kms::types::LiveSettings;
 use framepipe::embedded_preview::EmbeddedPreviewSession;
-use iced::{Subscription, Task};
+use iced::{Application, Subscription, Task, Theme};
 
 use crate::model::{
     AppMode, BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
@@ -24,6 +24,8 @@ pub enum Message {
     StartRecording,
     StopRecording,
     ToggleAdvanced,
+
+    ThemeChanged(Theme),
 
     SourceChanged(SourceChoice),
     CardEdited(String),
@@ -99,6 +101,8 @@ pub struct App {
 
     record_started_at: Option<Instant>,
     ui_tick: u64,
+
+    theme: Option<Theme>,
 }
 
 impl App {
@@ -123,7 +127,12 @@ impl App {
             live_mailbox: None,
             record_started_at: None,
             ui_tick: 0,
+            theme: Some(Theme::GruvboxDark),
         }
+    }
+
+    pub fn theme(&self) -> Option<Theme> {
+        self.theme.clone()
     }
 
     fn parse_opt_u32(input: &str) -> Option<u32> {
@@ -295,6 +304,10 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::ThemeChanged(theme) => {
+                self.theme = Some(theme);
+                Task::none()
+            }
             Message::Tick => {
                 self.ui_tick = self.ui_tick.wrapping_add(1);
                 Task::none()
