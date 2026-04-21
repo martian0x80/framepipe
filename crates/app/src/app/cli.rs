@@ -223,7 +223,7 @@ pub struct CaptureArgs {
     pub background: Option<PathBuf>,
     #[arg(
         long = "background-zoom",
-        default_value_t = 0.85,
+        default_value_t = 85.0,
         help = "Uniform scale applied to the source frame when --background is set [0.1, 1.0]"
     )]
     pub background_zoom: f32,
