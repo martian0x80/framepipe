@@ -1,5 +1,5 @@
 use iced::widget::shader::Shader as ShaderWidget;
-use iced::widget::{button, column, container, row, text};
+use iced::widget::{button, column, container, row, stack, text, image};
 use iced::{Alignment, Color, Element, Length, Theme};
 
 use crate::app::{App, Message};
@@ -7,7 +7,9 @@ use crate::app::{App, Message};
 impl App {
     fn preview_panel(&self) -> Element<'_, Message> {
         if matches!(self.mode, crate::model::AppMode::Recording) {
-            return container(
+            return stack![
+                image::Image::new("assets/grainy_bg.png").width(Length::Fill).height(Length::Fill).content_fit(iced::ContentFit::Cover),
+                container(
                 column![
                     text("Recording…").size(28),
                     text(self.recording_elapsed()).size(34),
@@ -21,25 +23,49 @@ impl App {
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .style(iced::widget::container::rounded_box)
-            .into();
+            ].into();
         }
 
         if !matches!(self.mode, crate::model::AppMode::Preview) {
-            return container(
+            return stack![
+                image::Image::new(self.background_cache.as_ref()
+                .unwrap_or(&iced::widget::image::Handle::from_path("assets/grainy_bg.png")))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .content_fit(iced::ContentFit::Cover)
+                .border_radius(32),
+            container(
                 column![
-                    text("Preview Disabled").size(24),
-                    text("Enable preview to inspect capture settings in realtime"),
-                    button("Enable Preview").on_press(Message::TogglePreview),
+                    container(
+                        text("Preview Disabled").size(24)
+                        .color(Color::from_rgb(0.8, 0.8, 0.8))
+                        .font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..Default::default()
+                    })
+                    )
+                    .padding(12)
+                    .style(|_| iced::widget::container::Style {
+                        background: Some(
+                            iced::Color::from_rgba(0.0, 0.0, 0.0, 0.6).into()
+                        ),
+                        border: iced::border::rounded(8),
+                        ..Default::default()
+                    }),
+                    text("Enable preview to inspect capture settings in realtime")
+                    .color(Color::from_rgb(0.7, 0.7, 0.7)),
+                    App::btn("Enable Preview").on_press(Message::TogglePreview),
                 ]
                 .align_x(Alignment::Center)
                 .spacing(8),
             )
+            .padding(8)
             .width(Length::FillPortion(3))
             .height(Length::Fill)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
-            .style(iced::widget::container::rounded_box)
-            .into();
+            .style(iced::widget::container::transparent)
+            ].into();
         }
 
         let has_frame = self
@@ -86,8 +112,11 @@ impl App {
     pub fn view(&self) -> Element<'_, Message> {
         container(
             column![
-                text("Framepipe").size(30),
-                text(&self.status).size(14),
+                row![
+                    text("Framepipe").size(30),
+                    text(" • ").size(30),
+                    text(&self.status).size(18).color(Color::from_rgb(0.7, 0.7, 0.7)),
+                ].align_y(Alignment::Center),
                 row![self.controls_panel(), self.preview_panel()]
                     .spacing(12)
                     .width(Length::Fill)

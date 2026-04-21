@@ -103,6 +103,7 @@ pub struct App {
     ui_tick: u64,
 
     theme: Option<Theme>,
+    background_cache: Option<iced::widget::image::Handle>,
 }
 
 impl App {
@@ -127,8 +128,18 @@ impl App {
             live_mailbox: None,
             record_started_at: None,
             ui_tick: 0,
-            theme: Some(Theme::GruvboxDark),
+            theme: Some(Theme::Moonfly),
+            background_cache: Some(iced::widget::image::Handle::from_path("assets/grainy_bg1.png")),
         }
+    }
+
+    pub fn btn<'a>(content: impl Into<iced::Element<'a, Message>>) -> iced::widget::Button<'a, Message> {
+        iced::widget::button(content)
+            .style(|theme, status| {
+                let mut style = iced::widget::button::primary(theme, status);
+                style.border.radius = 8.0.into();
+                style
+            })
     }
 
     pub fn theme(&self) -> Option<Theme> {

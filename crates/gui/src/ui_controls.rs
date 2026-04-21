@@ -1,3 +1,4 @@
+use iced::advanced::Widget;
 use iced::widget::scrollable::Scrollbar;
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
@@ -35,7 +36,7 @@ impl App {
     fn action_buttons(&self) -> Element<'_, Message> {
         if matches!(self.mode, crate::model::AppMode::Recording) {
             return column![
-                button(text("Stop Recording").size(26))
+                App::btn(text("Stop Recording").size(26))
                     .padding([16, 18])
                     .width(Length::Fill)
                     .style(button::danger)
@@ -53,12 +54,12 @@ impl App {
         };
 
         column![
-            button(text("Record").size(30))
+            App::btn(text("Record").size(30))
                 .padding([18, 20])
                 .width(Length::Fill)
                 .style(button::primary)
                 .on_press(Message::StartRecording),
-            button(text(preview_label).size(18))
+            App::btn(text(preview_label).size(18))
                 .padding([12, 16])
                 .width(Length::Fill)
                 .style(button::secondary)
@@ -156,7 +157,7 @@ impl App {
                 text("Output"),
                 container(text(Self::short_path(Some(&self.fixed.output_path))).size(13))
                     .width(Length::Fill),
-                button("Browse")
+                App::btn("Browse")
                     .on_press_maybe((!disabled).then_some(Message::PickOutputPath))
             ]
             .spacing(8)
@@ -167,9 +168,9 @@ impl App {
                     .on_toggle_maybe((!disabled).then_some(Message::BackgroundToggled)),
                 container(text(Self::short_path(self.live.background.as_ref())).size(13))
                     .width(Length::Fill),
-                button("Browse")
+                App::btn("Browse")
                     .on_press_maybe((!disabled).then_some(Message::PickBackgroundImage)),
-                button("Clear")
+                App::btn("Clear")
                     .on_press_maybe((!disabled).then_some(Message::BackgroundClear)),
             ]
             .spacing(8)
@@ -208,9 +209,9 @@ impl App {
                     text("Cursor Sprite"),
                     container(text(Self::short_path(self.live.cursor_sprite.as_ref())).size(13))
                         .width(Length::Fill),
-                    button("Browse")
+                    App::btn("Browse")
                         .on_press_maybe((!disabled).then_some(Message::PickCursorSprite)),
-                    button("Default")
+                    App::btn("Default")
                         .on_press_maybe((!disabled).then_some(Message::CursorSpriteClear)),
                 ]
                 .spacing(8)
@@ -420,7 +421,7 @@ impl App {
             controls = controls.push(
                 row![
                     text("Fixed settings changed"),
-                    button("Restart Preview")
+                    App::btn("Restart Preview")
                         .style(button::success)
                         .on_press(Message::RestartPreview),
                 ]
@@ -428,8 +429,9 @@ impl App {
             );
         }
 
+        controls = controls.push(Self::inset_divider());
         controls = controls.push(
-            button(if self.show_advanced {
+            App::btn(if self.show_advanced {
                 "Hide Advanced"
             } else {
                 "Show Advanced"
@@ -514,7 +516,7 @@ impl App {
                     text("Dump dir"),
                     container(text(Self::short_path(Some(&self.fixed.dump_dir))).size(13))
                         .width(Length::Fill),
-                    button("Browse")
+                    App::btn("Browse")
                         .on_press_maybe((!disabled).then_some(Message::PickDumpDir)),
                 ]
                 .spacing(8)
@@ -544,6 +546,7 @@ impl App {
         container(scrollable::Scrollable::with_direction(controls, scrollable::Direction::Vertical(Scrollbar::hidden())).auto_scroll(true))
             .padding(12)
             .style(iced::widget::container::rounded_box)
+            .height(Length::Fill)
             .width(Length::FillPortion(2))
             .max_width(560)
             .into()
