@@ -25,6 +25,10 @@ impl EmbeddedPreviewSession {
         self.live_settings.clone()
     }
 
+    pub fn control(&self) -> CaptureControl {
+        self.control.clone()
+    }
+
     pub fn stop(&self) {
         self.control.stop_requested.store(true, Ordering::Relaxed);
     }

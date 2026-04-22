@@ -55,6 +55,7 @@ pub enum Message {
 
     PickOutputPath,
     OutputPathPicked(Option<rfd::FileHandle>),
+    OutputPathCleared,
     PickCursorSprite,
     CursorSpritePicked(Option<rfd::FileHandle>),
     CursorSpriteClear,
@@ -83,6 +84,9 @@ pub enum Message {
     CursorSmearStretchRangeChanged(f32),
     CursorSmearMaxStretchChanged(f32),
     CursorSmearMaxSquashChanged(f32),
+
+    TogglePausePreview,
+    TogglePauseRecording,
 }
 
 pub struct App {
@@ -100,6 +104,10 @@ pub struct App {
     live_mailbox: Option<framepipe::drm_kms::types::LiveSettingsMailbox>,
 
     record_started_at: Option<Instant>,
+    record_control: Option<framepipe::app::signals::CaptureControl>,
+    record_thread: Option<std::thread::JoinHandle<()>>,
+    preview_control: Option<framepipe::app::signals::CaptureControl>,
+    paused: bool,
     ui_tick: u64,
 
     theme: Option<Theme>,
@@ -117,7 +125,7 @@ impl App {
 
         Self {
             mode: AppMode::Idle,
-            status: "Idle. Configure settings, then enable preview.".to_string(),
+            status: "Idle. ".to_string(),
             fixed,
             live,
             show_advanced: false,
@@ -127,6 +135,10 @@ impl App {
             preview_mailbox: None,
             live_mailbox: None,
             record_started_at: None,
+            record_control: None,
+            record_thread: None,
+            preview_control: None,
+            paused: false,
             ui_tick: 0,
             theme: Some(Theme::Moonfly),
             background_cache: Some(iced::widget::image::Handle::from_path("assets/grainy_bg1.png")),
@@ -270,26 +282,31 @@ impl App {
 
     fn stop_preview_session(&mut self) {
         if let Some(session) = self.preview_session.take() {
+            // Synchronously join the old session so the portal PipeWire stream
+            // is fully torn down before we allow a new session to start.
             session.stop();
-            std::thread::spawn(move || {
-                let _ = session.join();
-            });
+            let _ = session.join();
         }
         self.preview_program = None;
         self.preview_mailbox = None;
         self.live_mailbox = None;
+        self.preview_control = None;
+        self.paused = false;
         if matches!(self.mode, AppMode::Preview) {
             self.mode = AppMode::Idle;
         }
     }
 
     fn start_preview_session(&mut self) {
-        // self.stop_preview_session();
+        self.stop_preview_session();
         match framepipe::embedded_preview::start_embedded_preview(self.build_capture_args()) {
             Ok(session) => {
                 let preview_mailbox = session.mailbox();
                 let live_mailbox = session.live_settings();
                 live_mailbox.update(self.live.clone());
+                // Expose the CaptureControl so we can pause/resume the preview.
+                let control = session.control();
+                self.preview_control = Some(control);
 
                 self.preview_program = Some(PreviewProgram::new(preview_mailbox.clone()));
                 self.preview_mailbox = Some(preview_mailbox);
@@ -297,6 +314,7 @@ impl App {
                 self.preview_session = Some(session);
                 self.mode = AppMode::Preview;
                 self.fixed_dirty = false;
+                self.paused = false;
                 self.status = "Preview running".to_string();
             }
             Err(e) => {
@@ -343,18 +361,49 @@ impl App {
             }
             Message::StartRecording => {
                 self.stop_preview_session();
-                self.mode = AppMode::Recording;
-                self.record_started_at = Some(Instant::now());
-                self.status =
-                    "Recording mode (UI skeleton): preview disabled, controls locked".to_string();
+                let output = self.fixed.output_path.clone().unwrap_or_else(|| {
+                    let fmt = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+                    let filename = format!("framepipe_record_{}.mp4", fmt);
+                    if let Some(mut dir) = dirs::video_dir() {
+                        dir.push(filename);
+                        dir
+                    } else {
+                        std::path::PathBuf::from(filename)
+                    }
+                });
+
+                let control = framepipe::app::signals::CaptureControl::new_unregistered();
+                let args = self.build_capture_args();
+                let backend = args.capture_backend;
+
+                match framepipe::app::config::build_capture_options(args, framepipe::drm_kms::types::CaptureOutput::File(output.clone())) {
+                    Ok(options) => {
+                        self.mode = AppMode::Recording;
+                        self.record_started_at = Some(Instant::now());
+                        self.status = format!("Recording to {}", output.display());
+                        self.record_control = Some(control.clone());
+                        self.record_thread = Some(std::thread::spawn(move || {
+                            let _ = framepipe::app::app::RecordingSession::new(options, backend).map(|s| s.run(control));
+                        }));
+                    }
+                    Err(e) => {
+                        self.status = format!("Failed to start recording: {}", e);
+                    }
+                }
                 Task::none()
             }
             Message::StopRecording => {
                 self.mode = AppMode::Idle;
                 self.record_started_at = None;
+                if let Some(control) = self.record_control.take() {
+                    control.stop_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                if let Some(thread) = self.record_thread.take() {
+                    let _ = thread.join();
+                }
                 self.status = format!(
                     "Recording stopped. Output target: {}",
-                    self.fixed.output_path.to_string_lossy()
+                    self.fixed.output_path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "Dynamic".to_string())
                 );
                 Task::none()
             }
@@ -498,9 +547,14 @@ impl App {
             .map(Message::OutputPathPicked),
             Message::OutputPathPicked(handle) => {
                 if let Some(file) = handle {
-                    self.fixed.output_path = file.path().to_path_buf();
+                    self.fixed.output_path = Some(file.path().to_path_buf());
                     self.mark_fixed_changed();
                 }
+                Task::none()
+            }
+            Message::OutputPathCleared => {
+                self.fixed.output_path = None;
+                self.mark_fixed_changed();
                 Task::none()
             }
             Message::PickCursorSprite => Task::future(
@@ -649,6 +703,35 @@ impl App {
             Message::CursorSmearMaxSquashChanged(v) => {
                 self.live.cursor_smear_max_squash = v;
                 self.apply_live();
+                Task::none()
+            }
+
+            Message::TogglePausePreview => {
+                if let Some(ctrl) = &self.preview_control {
+                    if self.paused {
+                        ctrl.paused.store(false, std::sync::atomic::Ordering::Relaxed);
+                        self.paused = false;
+                        self.status = "Preview resumed".to_string();
+                    } else {
+                        ctrl.paused.store(true, std::sync::atomic::Ordering::Relaxed);
+                        self.paused = true;
+                        self.status = "Preview paused".to_string();
+                    }
+                }
+                Task::none()
+            }
+            Message::TogglePauseRecording => {
+                if let Some(ctrl) = &self.record_control {
+                    if self.paused {
+                        ctrl.paused.store(false, std::sync::atomic::Ordering::Relaxed);
+                        self.paused = false;
+                        self.status = format!("Recording to {}", self.fixed.output_path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "Dynamic".to_string()));
+                    } else {
+                        ctrl.paused.store(true, std::sync::atomic::Ordering::Relaxed);
+                        self.paused = true;
+                        self.status = "Recording paused".to_string();
+                    }
+                }
                 Task::none()
             }
         }

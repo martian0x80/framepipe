@@ -35,12 +35,18 @@ impl App {
 
     fn action_buttons(&self) -> Element<'_, Message> {
         if matches!(self.mode, crate::model::AppMode::Recording) {
+            let pause_label = if self.paused { "Resume Recording" } else { "Pause Recording" };
             return column![
                 App::btn(text("Stop Recording").size(26))
                     .padding([16, 18])
                     .width(Length::Fill)
                     .style(button::danger)
                     .on_press(Message::StopRecording),
+                App::btn(text(pause_label).size(18))
+                    .padding([10, 14])
+                    .width(Length::Fill)
+                    .style(button::secondary)
+                    .on_press(Message::TogglePauseRecording),
                 text(format!("Recording {}", self.recording_elapsed())).size(18),
             ]
             .spacing(10)
@@ -53,7 +59,7 @@ impl App {
             "Enable Preview"
         };
 
-        column![
+        let mut col = column![
             App::btn(text("Record").size(30))
                 .padding([18, 20])
                 .width(Length::Fill)
@@ -65,8 +71,20 @@ impl App {
                 .style(button::secondary)
                 .on_press(Message::TogglePreview),
         ]
-        .spacing(8)
-        .into()
+        .spacing(8);
+
+        if matches!(self.mode, crate::model::AppMode::Preview) {
+            let pause_label = if self.paused { "Resume Preview" } else { "Pause Preview" };
+            col = col.push(
+                App::btn(text(pause_label).size(16))
+                    .padding([8, 12])
+                    .width(Length::Fill)
+                    .style(button::secondary)
+                    .on_press(Message::TogglePausePreview),
+            );
+        }
+
+        col.into()
     }
 
     pub(super) fn controls_panel(&self) -> Element<'_, Message> {
@@ -155,10 +173,20 @@ impl App {
             .align_y(Alignment::Center),
             row![
                 text("Output"),
-                container(text(Self::short_path(Some(&self.fixed.output_path))).size(13))
+                container(text(match &self.fixed.output_path {
+                    Some(path) => Self::short_path(Some(path)),
+                    None => {
+                        match dirs::video_dir() {
+                            Some(v) => format!("{}/framepipe_record_<time>.mp4", v.display()),
+                            None => "framepipe_record_<time>.mp4".to_string(),
+                        }
+                    }
+                }).size(13))
                     .width(Length::Fill),
                 App::btn("Browse")
-                    .on_press_maybe((!disabled).then_some(Message::PickOutputPath))
+                    .on_press_maybe((!disabled).then_some(Message::PickOutputPath)),
+                App::btn("Clear")
+                    .on_press_maybe((!disabled).then_some(Message::OutputPathCleared)),
             ]
             .spacing(8)
             .align_y(Alignment::Center),

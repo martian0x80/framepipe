@@ -25,8 +25,18 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Record { capture, output } => {
+            let resolved_output = output.unwrap_or_else(|| {
+                let fmt = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+                let filename = format!("framepipe_record_{}.mp4", fmt);
+                if let Some(mut dir) = dirs::video_dir() {
+                    dir.push(filename);
+                    dir
+                } else {
+                    std::path::PathBuf::from(filename)
+                }
+            });
             let backend = capture.capture_backend;
-            let options = config::build_capture_options(capture, CaptureOutput::File(output))?;
+            let options = config::build_capture_options(capture, CaptureOutput::File(resolved_output))?;
             let control = CaptureControl::register().map_err(|e| eyre::eyre!(e))?;
             RecordingSession::new(options, backend)?.run(control)
         }

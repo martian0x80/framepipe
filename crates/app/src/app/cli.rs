@@ -26,8 +26,8 @@ pub enum Commands {
     Record {
         #[command(flatten)]
         capture: CaptureArgs,
-        #[arg(long, default_value = "output.mp4")]
-        output: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Preview live frames until stopped
     Preview {

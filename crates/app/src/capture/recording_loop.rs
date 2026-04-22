@@ -108,10 +108,21 @@ pub fn run_capture_session(
     })?;
     log::debug!("EGL context initialized");
     backend.on_egl_ready(&egl, display)?;
-    let first_frame = backend.next_frame().map_err(|e| {
-        log::error!("initial backend frame acquisition failed: {}", e);
-        e
-    })?;
+    let mut first_frame = None;
+    while !control.stop_requested.load(Ordering::Relaxed) {
+        match backend.next_frame(Duration::from_millis(100)) {
+            Ok(Some(frame)) => {
+                first_frame = Some(frame);
+                break;
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                log::error!("initial backend frame acquisition failed: {}", e);
+                return Err(e);
+            }
+        }
+    }
+    let first_frame = first_frame.ok_or_else(|| EglError::Pipeline("Capture stopped before first frame".to_string()))?;
     log::debug!("backend returned first frame, importing texture");
     let (texture, initial_source_w, initial_source_h, mut prev_fb_id, first_use_external_texture) =
         import_capture_frame_texture(first_frame, &egl, display).map_err(|e| {
@@ -405,9 +416,24 @@ pub fn run_capture_session(
             continue;
         }
 
-        let (frame_texture, frame_w, frame_h, fb_id, use_external_texture) = match backend
-            .next_frame()
-            .and_then(|frame| import_capture_frame_texture(frame, &egl, display))
+        let frame = match backend.next_frame(Duration::from_millis(100)) {
+            Ok(Some(f)) => f,
+            Ok(None) => {
+                if control.stop_requested.load(Ordering::Relaxed) {
+                    break;
+                }
+                continue;
+            }
+            Err(e) => {
+                if control.stop_requested.load(Ordering::Relaxed) {
+                    log::info!("Capture stopping; ignoring late frame error: {}", e);
+                    break;
+                }
+                return Err(e);
+            }
+        };
+
+        let (frame_texture, frame_w, frame_h, fb_id, use_external_texture) = match import_capture_frame_texture(frame, &egl, display)
         {
             Ok(v) => v,
             Err(e) => {

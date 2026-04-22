@@ -39,7 +39,7 @@ impl CaptureBackend for DrmKmsBackend {
         CaptureBackendKind::DrmKms
     }
 
-    fn next_frame(&mut self) -> Result<CaptureFrame, EglError> {
+    fn next_frame(&mut self, _timeout: std::time::Duration) -> Result<Option<CaptureFrame>, EglError> {
         let probe = self
             .probe
             .as_mut()
@@ -55,7 +55,7 @@ impl CaptureBackend for DrmKmsBackend {
             .map_err(|e| EglError::Pipeline(format!("privd framebuffer export failed: {e}")))?;
         let frame = exported.info;
 
-        Ok(CaptureFrame {
+        Ok(Some(CaptureFrame {
             fb_id: frame.fb_id,
             width: frame.width,
             height: frame.height,
@@ -72,7 +72,7 @@ impl CaptureBackend for DrmKmsBackend {
                 .iter()
                 .map(|v| (*v).max(0) as u32)
                 .collect(),
-        })
+        }))
     }
 
     fn stop(&mut self) -> Result<(), EglError> {

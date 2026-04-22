@@ -367,7 +367,7 @@ pub struct FixedOptions {
     pub cursor_hotspot_x: String,
     pub cursor_hotspot_y: String,
 
-    pub output_path: PathBuf,
+    pub output_path: Option<PathBuf>,
 }
 
 impl Default for FixedOptions {
@@ -396,7 +396,7 @@ impl Default for FixedOptions {
             mouse_tracking_file: PathBuf::from("openstudio-cursor.bitcode"),
             cursor_hotspot_x: "0".to_string(),
             cursor_hotspot_y: "0".to_string(),
-            output_path: PathBuf::from("output.mp4"),
+            output_path: None,
         }
     }
 }
