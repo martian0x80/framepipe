@@ -4,6 +4,8 @@ use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use common::ipc::{recv_packet, send_packet};
 use common::types::{ExportedFrameInfo, IpcRequest, IpcResponse};
@@ -29,9 +31,29 @@ pub struct PrivdSession {
 
 impl Drop for PrivdSession {
     fn drop(&mut self) {
+        log::debug!("privd session drop: sending stop to child pid={}", self.child.id());
         let _ = send_packet(&self.stream, &IpcRequest::Stop, &[]);
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    log::debug!("privd child exited pid={} status={status}", self.child.id());
+                    break;
+                }
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            log::debug!("privd child force-killed pid={}", self.child.id());
+        }
     }
 }
 

@@ -2,6 +2,7 @@ use std::{os::fd::{AsRawFd, FromRawFd, OwnedFd}, sync::Arc, thread, time::Durati
 use khronos_egl as egl;
 
 use crate::{
+    drm_kms::types::CaptureOutput,
     capture::types::CaptureFrame,
     drm_kms::{egl_context::EglError, privd, types::CaptureOptions},
     portal::pipewire::{
@@ -28,11 +29,13 @@ impl CaptureBackend for PipeWirePortalBackend {
         self.producer = None;
         self.first_frame_seen = false;
         self.last_frame = None;
-        let include_input_fds = options.mouse_tracking || options.cursor_composition;
+        let include_input_fds = options.cursor_composition;
         if include_input_fds {
             let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
                 .map_err(|e| EglError::Pipeline(format!("failed to acquire device fds from privd: {e}")))?;
             self.privd = Some(privd_session);
+        } else {
+            self.privd = None;
         }
         Ok(())
     }

@@ -240,7 +240,7 @@ pub struct CaptureOptions {
     pub colorimetry: Colorimetry,
     pub encoder_backend: EncoderBackend,
     pub video_codec: VideoCodec,
-    pub mouse_tracking: bool,
+    // pub mouse_tracking: bool,
     pub cursor_composition: bool,
     pub cursor_sprite: Option<PathBuf>,
     pub cursor_hotspot_x: i32,

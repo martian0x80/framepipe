@@ -30,7 +30,9 @@ pub fn run_capture_session(
         options.connector,
         options.fps
     );
-    let use_mouse_tracking = options.mouse_tracking || options.cursor_composition;
+    let use_mouse_tracking =
+        (options.cursor_composition)
+            && !matches!(options.output, CaptureOutput::EmbeddedPreview);
     let input_fds_for_tracker = if use_mouse_tracking {
         backend.take_input_fds()
     } else {
@@ -44,11 +46,11 @@ pub fn run_capture_session(
     };
 
     let _mouse_tracking_worker = if use_mouse_tracking {
-        if options.cursor_composition && !options.mouse_tracking {
-            log::info!(
-                "Cursor composition requested without --mouse-tracking; enabling internal mouse tracking automatically"
-            );
-        }
+        // if options.cursor_composition && !options.mouse_tracking {
+        //     log::info!(
+        //         "Cursor composition requested without --mouse-tracking; enabling internal mouse tracking automatically"
+        //     );
+        // }
         let tracking_path = options.mouse_tracking_file.clone();
         let sync_frequency_hz = options.wayland_sync_frequency;
         let started_unix_ms = SystemTime::now()

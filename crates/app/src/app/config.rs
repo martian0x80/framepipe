@@ -50,7 +50,7 @@ pub fn build_capture_options(
         colorimetry: capture.colorimetry,
         encoder_backend: capture.encoder_backend,
         video_codec: capture.video_codec,
-        mouse_tracking: capture.mouse_tracking,
+        // mouse_tracking: capture.mouse_tracking,
         cursor_composition: capture.cursor_composition,
         cursor_sprite: capture.cursor_sprite,
         cursor_hotspot_x: capture.cursor_hotspot_x,
