@@ -20,7 +20,7 @@ use khronos_egl as egl;
 use pipewire as pw;
 use pw::{properties::properties, spa};
 use spa::pod::Pod;
-use crate::{capture::types::CaptureFrame, shared::pipewire_frame_ring::PipeWireFrameRing};
+use crate::{capture::types::CaptureFrame, portal::portal_connection, shared::pipewire_frame_ring::PipeWireFrameRing};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -72,22 +72,6 @@ fn store_cached_restore_token(token: Option<String>) {
     if let Ok(mut guard) = screencast_restore_token().lock() {
         *guard = token;
     }
-}
-
-async fn portal_connection() -> eyre::Result<zbus::Connection> {
-    // let conn = CONNECTION
-    //     .get_or_try_init(|| async {
-    //         log::debug!("establishing new zbus connection to portal");
-    //         zbus::Connection::session()
-    //             .await
-    //             .map_err(|e| eyre::eyre!("failed to establish zbus session connection: {e}"))
-    //     })
-    //     .await?;
-    zbus::Connection::session()
-        .await
-        .map_err(|e| eyre::eyre!("failed to establish zbus session connection: {e}"))
-
-    // Ok(conn.clone())
 }
 
 async fn screencast_with_restore_token(

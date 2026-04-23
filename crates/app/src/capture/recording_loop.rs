@@ -3,7 +3,7 @@ use std::{
     fs, num::NonZero, ops::Div as _, path::Path, sync::{Arc, atomic::Ordering}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
 };
 
-use crate::{app::signals::CaptureControl, drm_kms::types::Profile};
+use crate::{app::signals::CaptureControl, drm_kms::types::Profile, portal::notifs::ProcessState};
 use crate::capture::backend::CaptureBackend;
 use crate::cursor::cursor::*;
 use crate::drm_kms::{
@@ -110,6 +110,12 @@ pub fn run_capture_session(
     })?;
     log::debug!("EGL context initialized");
     backend.on_egl_ready(&egl, display)?;
+    let pstate = match options.output {
+        CaptureOutput::File(_) => crate::portal::notifs::ProcessState::Running,
+        CaptureOutput::Preview => crate::portal::notifs::ProcessState::Preview,
+        CaptureOutput::EmbeddedPreview => crate::portal::notifs::ProcessState::Preview,
+    };
+    let _ = backend.send_notification(pstate, 2);
     let mut first_frame = None;
     while !control.stop_requested.load(Ordering::Relaxed) {
         match backend.next_frame(Duration::from_millis(100)) {
@@ -403,6 +409,7 @@ pub fn run_capture_session(
         }
         if control.pause_req.swap(false, Ordering::Relaxed) {
             control.paused.store(true, Ordering::Relaxed);
+            let _ = backend.send_notification(ProcessState::Paused, 2);
             log::info!("Recording paused (SIGUSR1)");
         }
         if control.resume_req.swap(false, Ordering::Relaxed) {

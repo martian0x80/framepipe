@@ -1,6 +1,7 @@
 use crate::{
     capture::types::CaptureFrame,
     drm_kms::{egl_context::EglError, types::CaptureOptions},
+    portal::notifs::{send_notification, ProcessState},
 };
 use khronos_egl as egl;
 
@@ -30,6 +31,17 @@ pub trait CaptureBackend: Send {
     fn kind(&self) -> CaptureBackendKind;
     fn take_input_fds(&mut self) -> Option<std::collections::HashMap<std::path::PathBuf, std::os::fd::OwnedFd>> {
         None
+    }
+    // i am sorry for this but it is what it is
+    fn send_notification(&mut self, state: ProcessState, timeout: u32) -> eyre::Result<()>
+    {
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let _ = send_notification(&state, timeout).await;
+            });
+        });
+        Ok(())
     }
 }
 
