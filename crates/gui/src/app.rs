@@ -193,7 +193,6 @@ impl App {
         args.encoder_backend = self.fixed.encoder.to_encoder();
         args.video_codec = self.fixed.codec.to_codec();
         args.cursor_composition = self.fixed.cursor_composition;
-        args.mouse_tracking = args.cursor_composition;
         args.cursor_hotspot_x = Self::parse_or(&self.fixed.cursor_hotspot_x, 0_i32);
         args.cursor_hotspot_y = Self::parse_or(&self.fixed.cursor_hotspot_y, 0_i32);
         args.cursor_scale = self.live.cursor_scale.clamp(1.0, 100.0);
@@ -217,7 +216,6 @@ impl App {
         args.cursor_smear_max_stretch = self.live.cursor_smear_max_stretch;
         args.cursor_smear_max_squash = self.live.cursor_smear_max_squash;
         args.wayland_sync_frequency = Self::parse_or(&self.fixed.wayland_sync_frequency, 0.5_f64);
-        args.mouse_tracking_file = self.fixed.mouse_tracking_file.to_string_lossy().into_owned();
         args.profile = self.fixed.profile.to_profile();
         args.cursor_sprite = self.live.cursor_sprite.clone();
         args.background = self.live.background.clone();

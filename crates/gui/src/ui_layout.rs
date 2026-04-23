@@ -1,5 +1,5 @@
 use iced::widget::shader::Shader as ShaderWidget;
-use iced::widget::{button, column, container, row, stack, text, image};
+use iced::widget::{column, container, row, stack, text, image};
 use iced::{Alignment, Color, Element, Length, Theme};
 
 use crate::app::{App, Message};
@@ -8,7 +8,7 @@ impl App {
     fn preview_panel(&self) -> Element<'_, Message> {
         if matches!(self.mode, crate::model::AppMode::Recording) {
             return stack![
-                image::Image::new("assets/grainy_bg.png").width(Length::Fill).height(Length::Fill).content_fit(iced::ContentFit::Cover),
+                image::Image::new(self.background_cache.as_ref().unwrap_or(&iced::widget::image::Handle::from_path("assets/grainy_bg.png"))).width(Length::Fill).height(Length::Fill).content_fit(iced::ContentFit::Cover),
                 container(
                 column![
                     text("Recording…").size(28),

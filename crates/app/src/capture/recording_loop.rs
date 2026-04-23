@@ -1,6 +1,6 @@
 use glow::{HasContext, NativeTexture};
 use std::{
-    fs, num::NonZero, ops::Div as _, path::Path, sync::{Arc, atomic::Ordering}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
+    fs, num::NonZero, ops::Div as _, path::{Path, PathBuf}, sync::{Arc, atomic::Ordering}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
 };
 
 use crate::{app::signals::CaptureControl, drm_kms::types::Profile, portal::notifs::ProcessState};
@@ -51,7 +51,8 @@ pub fn run_capture_session(
         //         "Cursor composition requested without --mouse-tracking; enabling internal mouse tracking automatically"
         //     );
         // }
-        let tracking_path = options.mouse_tracking_file.clone();
+        // todo: remove this deprecated option
+        let tracking_path = PathBuf::from("/tmp/openstudio-mouse-tracking.bitcode");
         let sync_frequency_hz = options.wayland_sync_frequency;
         let started_unix_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -115,7 +116,7 @@ pub fn run_capture_session(
         CaptureOutput::Preview => crate::portal::notifs::ProcessState::Preview,
         CaptureOutput::EmbeddedPreview => crate::portal::notifs::ProcessState::Preview,
     };
-    let _ = backend.send_notification(pstate, 2);
+    let _ = backend.send_notification(pstate, 1);
     let mut first_frame = None;
     while !control.stop_requested.load(Ordering::Relaxed) {
         match backend.next_frame(Duration::from_millis(100)) {
@@ -625,7 +626,7 @@ pub fn run_capture_session(
                 pipelines[slot].gl.finish();
             }
             pipelines[slot].gl.delete_sync(fence);
-            pipelines[slot].gl.finish();
+            // pipelines[slot].gl.finish();
         }
 
         if matches!(options.output, CaptureOutput::EmbeddedPreview) {
@@ -728,24 +729,22 @@ pub fn run_capture_session(
             .map_err(|e: crate::encode::EncodeError| EglError::Pipeline(e.to_string()))?;
     }
 
-    let mouse_file = if use_mouse_tracking {
-        options.mouse_tracking_file.to_string_lossy().into_owned()
-    } else {
-        "disabled".to_string()
-    };
     log::info!(
-        "Shutdown summary: frames_emitted={} mouse_tracking_file={}",
+        "Shutdown summary: frames_emitted={}",
         frame_idx,
-        mouse_file
     );
 
     match &options.output {
-        CaptureOutput::Preview | CaptureOutput::EmbeddedPreview => log::info!("Preview stopped"),
+        CaptureOutput::Preview | CaptureOutput::EmbeddedPreview => {
+            log::info!("Preview stopped");
+            backend.send_notification(ProcessState::Stopped(None), 3).ok();
+        },
         CaptureOutput::File(path) => {
             log::info!(
                 "Video encoding complete, output saved to {}",
                 path.to_string_lossy()
-            )
+            );
+            backend.send_notification(ProcessState::Stopped(Some(path.to_string_lossy().into())), 3).ok();
         }
     }
 

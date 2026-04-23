@@ -2,7 +2,6 @@ use std::{os::fd::{AsRawFd, FromRawFd, OwnedFd}, sync::Arc, thread, time::Durati
 use khronos_egl as egl;
 
 use crate::{
-    drm_kms::types::CaptureOutput,
     capture::types::CaptureFrame,
     drm_kms::{egl_context::EglError, privd, types::CaptureOptions},
     portal::pipewire::{

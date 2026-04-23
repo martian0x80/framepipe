@@ -363,7 +363,6 @@ pub struct FixedOptions {
 
     pub cursor_composition: bool,
     pub wayland_sync_frequency: String,
-    pub mouse_tracking_file: PathBuf,
     pub cursor_hotspot_x: String,
     pub cursor_hotspot_y: String,
 
@@ -393,7 +392,6 @@ impl Default for FixedOptions {
             profile: ProfileChoice::Auto,
             cursor_composition: true,
             wayland_sync_frequency: "0.5".to_string(),
-            mouse_tracking_file: PathBuf::from("openstudio-cursor.bitcode"),
             cursor_hotspot_x: "0".to_string(),
             cursor_hotspot_y: "0".to_string(),
             output_path: None,

@@ -4,7 +4,7 @@ use crate::portal::portal_connection;
 
 pub enum ProcessState {
     Running,
-    Stopped(String),
+    Stopped(Option<String>),
     Preview,
     Paused
 }
@@ -24,7 +24,10 @@ impl ProcessState {
     pub fn to_body(&self) -> String {
         match self {
             ProcessState::Running => "Screen recording is about to start".into(),
-            ProcessState::Stopped(path) => format!("Screen recording has stopped, file saved to {}", path),
+            ProcessState::Stopped(path) => match path {
+                Some(path) => format!("Screen recording has stopped, file saved to {}", path),
+                None => "Screen recording has stopped".into(),
+            },
             ProcessState::Preview => "Preview started".into(),
             ProcessState::Paused => "Screen recording paused".into(),
         }

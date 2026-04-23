@@ -1,4 +1,3 @@
-use iced::advanced::Widget;
 use iced::widget::scrollable::Scrollbar;
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,

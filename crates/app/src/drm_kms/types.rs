@@ -240,7 +240,6 @@ pub struct CaptureOptions {
     pub colorimetry: Colorimetry,
     pub encoder_backend: EncoderBackend,
     pub video_codec: VideoCodec,
-    // pub mouse_tracking: bool,
     pub cursor_composition: bool,
     pub cursor_sprite: Option<PathBuf>,
     pub cursor_hotspot_x: i32,
@@ -266,12 +265,11 @@ pub struct CaptureOptions {
     pub cursor_smear_max_stretch: f32,
     pub cursor_smear_max_squash: f32,
     pub wayland_sync_frequency: f64,
-    pub mouse_tracking_file: PathBuf,
     pub profile: Option<Profile>,
     /// Background image path for frame compositing.  When `Some`, the source
     /// frame is scaled to `background_zoom` and composited on top of this image.
     pub background: Option<PathBuf>,
-    /// Scale factor [0.1, 1.0] for the source frame when background is active.
+    /// Scale factor [1.0, 100.0] for the source frame when background is active.
     pub background_zoom: f32,
     pub preview_mailbox: Option<common::types::PreviewMailbox>,
     /// Live-mutable settings that the recording loop re-reads every frame.

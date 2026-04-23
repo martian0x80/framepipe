@@ -80,8 +80,6 @@ pub struct CaptureArgs {
     pub encoder_backend: EncoderBackend,
     #[arg(short = 'v', long, default_value_t = VideoCodec::H264)]
     pub video_codec: VideoCodec,
-    #[arg(short = 'm', long, default_value_t = false)]
-    pub mouse_tracking: bool,
     #[arg(long, default_value_t = false)]
     pub cursor_composition: bool,
     #[arg(long, help = "PNG sprite for live cursor composition")]
@@ -208,12 +206,6 @@ pub struct CaptureArgs {
         help = "Frequency to sync mouse tracking data to Wayland layer (in Hz)"
     )]
     pub wayland_sync_frequency: f64,
-    #[arg(
-        long,
-        default_value = "openstudio-cursor.bitcode",
-        help = "File path to write mouse tracking data to"
-    )]
-    pub mouse_tracking_file: String,
     #[arg(long, help = "Capture profile (hdr10, hdr, sdr)")]
     pub profile: Option<Profile>,
     #[arg(
@@ -224,7 +216,7 @@ pub struct CaptureArgs {
     #[arg(
         long = "background-zoom",
         default_value_t = 85.0,
-        help = "Uniform scale applied to the source frame when --background is set [0.1, 1.0]"
+        help = "Uniform scale applied to the source frame when --background is set [1.0, 100.0]"
     )]
     pub background_zoom: f32,
 }
@@ -250,7 +242,6 @@ impl Default for CaptureArgs {
             colorimetry: Colorimetry::Bt709,
             encoder_backend: EncoderBackend::Qsv,
             video_codec: VideoCodec::H264,
-            mouse_tracking: false,
             cursor_composition: false,
             cursor_sprite: None,
             cursor_hotspot_x: 0,
@@ -276,7 +267,6 @@ impl Default for CaptureArgs {
             cursor_smear_max_stretch: 2.0,
             cursor_smear_max_squash: 0.15,
             wayland_sync_frequency: 0.5,
-            mouse_tracking_file: "openstudio-cursor.bitcode".to_string(),
             profile: None,
             background: None,
             background_zoom: 85.0,
