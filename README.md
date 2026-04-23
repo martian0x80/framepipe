@@ -10,6 +10,8 @@ Framepipe is built around a pragmatic design philosophy: when high-level APIs im
 
 Rather than waiting for upstream solutions, we focus on delivering working implementations today, even if that requires stepping outside conventional application boundaries.
 
+Framepipe now includes a Iced-based GUI for configuration and preview, but it can also be used as a CLI tool for recording without the GUI.
+
 Two capture backends are available: DRM/KMS and XDG Portal (PipeWire). The former is more stable and convenient but requires some capabilities (`setcap`) to be set, pipewire support is almost stable as well, but requires extra work.
 
 This repo is still under work and not very stable. Interfaces and CLI flags might change.
@@ -63,7 +65,7 @@ sudo setcap cap_sys_admin,cap_dac_override+ep target/debug/framepipe-privd
 Run capture (H.264, default backend):
 
 ```bash
-cargo run -p framepipe -- record --output output.mp4
+cargo run -p framepipe -- record
 ```
 
 Preview (no file output):
@@ -78,13 +80,15 @@ Set Quality presets:
 cargo run -p framepipe -- record --output output.mp4 -q ultra
 ```
 
-Enable cursor composition with sprite:
+Enable cursor composition with sprite, set fps, profile, codec, and rate control method:
 
 ```bash
-GST_DEBUG="*:3" cargo run -p framepipe -- record --fps 120 --output output.mp4 -q high -v h265 -e qsv -r cqp --wayland-sync-frequency 0.1 --cursor-composition --cursor-sprite /home/martian/Downloads/cursor-weird.png --cursor-scale 0.1
+GST_DEBUG="*:3" cargo run -p framepipe -- record --fps 120 -q high -v h265 -e qsv -r cqp --wayland-sync-frequency 0.1 --cursor-composition --cursor-sprite /home/martian/Downloads/cursor-weird.png --cursor-scale 0.1
 ```
 
 ## Notes
 
 - Requires access to `/dev/dri/*` for kms capture.
 - Some pipelines depend on installed GStreamer plugins.
+
+If you are hiring, reach out at `hire@0x80.dev` or @martian0x80 on Twitter.

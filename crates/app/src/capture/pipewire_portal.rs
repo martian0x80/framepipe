@@ -28,11 +28,13 @@ impl CaptureBackend for PipeWirePortalBackend {
         self.producer = None;
         self.first_frame_seen = false;
         self.last_frame = None;
-        let include_input_fds = options.mouse_tracking || options.cursor_composition;
+        let include_input_fds = options.cursor_composition;
         if include_input_fds {
             let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
                 .map_err(|e| EglError::Pipeline(format!("failed to acquire device fds from privd: {e}")))?;
             self.privd = Some(privd_session);
+        } else {
+            self.privd = None;
         }
         Ok(())
     }
@@ -60,7 +62,7 @@ impl CaptureBackend for PipeWirePortalBackend {
         CaptureBackendKind::PipewirePortal
     }
 
-    fn next_frame(&mut self) -> Result<CaptureFrame, EglError> {
+    fn next_frame(&mut self, timeout: Duration) -> Result<Option<CaptureFrame>, EglError> {
         let ring = self
             .ring
             .as_ref()
@@ -71,54 +73,58 @@ impl CaptureBackend for PipeWirePortalBackend {
                 .is_some_and(|p| p.is_ended() || p.has_failed())
         };
 
-        let mut first_wait_logs: u32 = 0;
-        while !self.first_frame_seen {
-            if let Some(frame) = ring.pop_latest() {
-                self.first_frame_seen = true;
-                log::info!("first pipewire frame received: {}x{} format={}", frame.width, frame.height, frame.fourcc);
-                self.last_frame = Some(dup_capture_frame(&frame)?);
-                return Ok(frame);
+        let start = std::time::Instant::now();
+        if !self.first_frame_seen {
+            let mut first_wait_logs: u32 = 0;
+            while !self.first_frame_seen {
+                if let Some(frame) = ring.pop_latest() {
+                    self.first_frame_seen = true;
+                    log::info!("first pipewire frame received: {}x{} format={}", frame.width, frame.height, frame.fourcc);
+                    self.last_frame = Some(dup_capture_frame(&frame)?);
+                    return Ok(Some(frame));
+                }
+                if producer_ended() {
+                    return Err(EglError::Pipeline(
+                        "pipewire stream ended before first frame".to_string(),
+                    ));
+                }
+                if start.elapsed() >= timeout {
+                    return Ok(None);
+                }
+                first_wait_logs = first_wait_logs.saturating_add(1);
+                if first_wait_logs % 100 == 0 {
+                    log::debug!(
+                        "pipewire backend waiting for first frame (stream may be paused until window damage)"
+                    );
+                }
+                thread::sleep(Duration::from_millis(5));
             }
-            if producer_ended() {
-                return Err(EglError::Pipeline(
-                    "pipewire stream ended before first frame".to_string(),
-                ));
+        } else {
+            while start.elapsed() < timeout {
+                if let Some(frame) = ring.pop_latest() {
+                    self.last_frame = Some(dup_capture_frame(&frame)?);
+                    return Ok(Some(frame));
+                }
+                if producer_ended() {
+                    return Err(EglError::Pipeline("pipewire stream ended".to_string()));
+                }
+                thread::sleep(Duration::from_millis(5));
             }
-            first_wait_logs = first_wait_logs.saturating_add(1);
-            if first_wait_logs % 500 == 0 {
-                log::debug!(
-                    "pipewire backend waiting for first frame (stream may be paused until window damage)"
-                );
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-
-        for _ in 0..20 {
-            if let Some(frame) = ring.pop_latest() {
-                self.last_frame = Some(dup_capture_frame(&frame)?);
-                return Ok(frame);
-            }
-            if producer_ended() {
-                return Err(EglError::Pipeline("pipewire stream ended".to_string()));
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
-
-        if producer_ended() {
-            return Err(EglError::Pipeline("pipewire stream ended".to_string()));
         }
 
         if let Some(last) = self.last_frame.as_ref() {
-            return dup_capture_frame(last);
+            return Ok(Some(dup_capture_frame(last)?));
         }
 
-        Err(EglError::Pipeline("no pipewire frame available".to_string()))
+        Ok(None)
     }
 
     fn stop(&mut self) -> Result<(), EglError> {
         if let Some(producer) = self.producer.take() {
             producer.stop();
         }
+        drop(self.privd.take());
+        self.privd = None;
         self.ring = None;
         self.last_frame = None;
         Ok(())

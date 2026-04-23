@@ -90,12 +90,14 @@ pub struct MouseTrackingWorker {
     pub handle: Option<thread::JoinHandle<()>>,
 }
 
-pub fn create_cursor_texture_from_png(
+/// Load a PNG or JPEG image from `path` and upload it as an RGBA8 GL texture.
+/// Returns `(texture, width_f32, height_f32)` on success.
+pub fn load_rgba_texture(
     gl: &glow::Context,
     path: &Path,
 ) -> Result<(glow::NativeTexture, f32, f32), String> {
     let img = image::open(path)
-        .map_err(|e| format!("failed to load cursor sprite {}: {e}", path.display()))?
+        .map_err(|e| format!("failed to load image {}: {e}", path.display()))?
         .to_rgba8();
     let w = img.width() as i32;
     let h = img.height() as i32;

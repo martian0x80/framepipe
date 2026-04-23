@@ -1,9 +1,10 @@
 [package]
 name = "common"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 bincode = { workspace = true }
 nix = { workspace = true }
+arc-swap = "1.9.1"

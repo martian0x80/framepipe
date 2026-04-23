@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use common::types::{PreviewFrame, PreviewMailbox};
 use glow::HasContext;
 
 use crate::drm_kms::types::Profile;
@@ -183,6 +186,10 @@ impl GpuPipeline {
             in vec2 v_uv;
             uniform sampler2D u_src;
             uniform sampler2D u_cursor;
+            uniform sampler2D u_bg;
+            uniform int u_bg_enabled;
+            uniform float u_frame_zoom;
+            uniform vec2 u_frame_offset;
             uniform int u_cursor_tap_count;
             uniform vec3 u_cursor_taps[8]; // x,y,alpha in output pixel space
             uniform vec2 u_cursor_size_px; // w,h
@@ -194,13 +201,25 @@ impl GpuPipeline {
 
             void main() {
                 vec2 uv = v_uv;
-                vec4 base = texture(u_src, uv);
-                vec2 p = uv * u_out_size; // output pixel space
 
-                for (int i = 0; i < 8; i++) {
-                    if (i >= u_cursor_tap_count) {
-                        break;
+                // --- background / frame-zoom compositing ---
+                vec4 base;
+                if (u_bg_enabled == 1) {
+                    vec2 frame_uv = (uv - u_frame_offset) / u_frame_zoom;
+                    if (frame_uv.x >= 0.0 && frame_uv.x <= 1.0
+                            && frame_uv.y >= 0.0 && frame_uv.y <= 1.0) {
+                        base = texture(u_src, frame_uv);
+                    } else {
+                        base = texture(u_bg, uv);
                     }
+                } else {
+                    base = texture(u_src, uv);
+                }
+
+                // --- cursor compositing ---
+                vec2 p = uv * u_out_size;
+                for (int i = 0; i < 8; i++) {
+                    if (i >= u_cursor_tap_count) { break; }
                     vec2 cmin = u_cursor_taps[i].xy;
                     vec2 cmax = cmin + u_cursor_size_px;
                     if (p.x >= cmin.x && p.y >= cmin.y && p.x < cmax.x && p.y < cmax.y) {
@@ -229,6 +248,10 @@ impl GpuPipeline {
             in vec2 v_uv;
             uniform samplerExternalOES u_src;
             uniform sampler2D u_cursor;
+            uniform sampler2D u_bg;
+            uniform int u_bg_enabled;
+            uniform float u_frame_zoom;
+            uniform vec2 u_frame_offset;
             uniform int u_cursor_tap_count;
             uniform vec3 u_cursor_taps[8]; // x,y,alpha in output pixel space
             uniform vec2 u_cursor_size_px; // w,h
@@ -240,13 +263,25 @@ impl GpuPipeline {
 
             void main() {
                 vec2 uv = v_uv;
-                vec4 base = texture(u_src, uv);
-                vec2 p = uv * u_out_size; // output pixel space
 
-                for (int i = 0; i < 8; i++) {
-                    if (i >= u_cursor_tap_count) {
-                        break;
+                // --- background / frame-zoom compositing ---
+                vec4 base;
+                if (u_bg_enabled == 1) {
+                    vec2 frame_uv = (uv - u_frame_offset) / u_frame_zoom;
+                    if (frame_uv.x >= 0.0 && frame_uv.x <= 1.0
+                            && frame_uv.y >= 0.0 && frame_uv.y <= 1.0) {
+                        base = texture(u_src, frame_uv);
+                    } else {
+                        base = texture(u_bg, uv);
                     }
+                } else {
+                    base = texture(u_src, uv);
+                }
+
+                // --- cursor compositing ---
+                vec2 p = uv * u_out_size;
+                for (int i = 0; i < 8; i++) {
+                    if (i >= u_cursor_tap_count) { break; }
                     vec2 cmin = u_cursor_taps[i].xy;
                     vec2 cmax = cmin + u_cursor_size_px;
                     if (p.x >= cmin.x && p.y >= cmin.y && p.x < cmax.x && p.y < cmax.y) {
@@ -388,14 +423,20 @@ impl GpuPipeline {
         }
     }
 
-    // 1) render source texture -> encoder input target (RGBA here)
-    // 2) cursor blend in same pass
-    // 3) insert GL fence
+    /// Renders `src_tex` into the pipeline's output FBO, compositing the
+    /// background and cursor in a single pass, then inserts a GL fence.
+    ///
+    /// * `bg_tex` => when `Some`, the background texture is composited behind
+    ///   the (zoomed) source frame.  Pass `None` for no background.
+    /// * `frame_zoom` => scale factor for the source frame [0.1, 1.0].  The
+    ///   frame is centered in the output.  Pass `1.0` for no zoom.
     pub unsafe fn render_with_cursor(
         &self,
         src_tex: glow::NativeTexture,
         use_external_texture: bool,
         cursor: &CursorState,
+        bg_tex: Option<glow::NativeTexture>,
+        frame_zoom: f32,
     ) -> Result<glow::NativeFence, String> {
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
@@ -496,6 +537,32 @@ impl GpuPipeline {
                 );
             }
 
+            let zoom = frame_zoom.clamp(0.1, 1.0);
+            let use_bg = bg_tex.is_some() as i32;
+            self.gl.uniform_1_i32(
+                self.gl.get_uniform_location(program, "u_bg_enabled").as_ref(),
+                use_bg,
+            );
+            self.gl.uniform_1_f32(
+                self.gl.get_uniform_location(program, "u_frame_zoom").as_ref(),
+                zoom,
+            );
+            // Center the shrunken frame: offset = (1 - zoom) / 2 on each axis.
+            let offset = (1.0 - zoom) * 0.5;
+            self.gl.uniform_2_f32(
+                self.gl.get_uniform_location(program, "u_frame_offset").as_ref(),
+                offset,
+                offset,
+            );
+            if let Some(bgtex) = bg_tex {
+                self.gl.active_texture(glow::TEXTURE2);
+                self.gl.bind_texture(glow::TEXTURE_2D, Some(bgtex));
+                self.gl.uniform_1_i32(
+                    self.gl.get_uniform_location(program, "u_bg").as_ref(),
+                    2,
+                );
+            }
+
             self.gl.bind_vertex_array(Some(self.vao));
             self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
 
@@ -511,8 +578,70 @@ impl GpuPipeline {
         }
     }
 
+    pub fn read_pixels(&self) -> Result<Vec<u8>, String> {
+        unsafe {
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
+            let fbo_status = self.gl.check_framebuffer_status(glow::FRAMEBUFFER);
+            if fbo_status != glow::FRAMEBUFFER_COMPLETE {
+                return Err(format!(
+                    "FBO incomplete: status=0x{:x}",
+                    fbo_status
+                ));
+            }
+            // RGBA8 only readback for now
+            let mut pixels = vec![0u8; (self.out_w * self.out_h * 4) as usize];
+            // let pbo = glow::Context::create_buffer(&self.gl).map_err(|e| e.to_string())?;
+            // self.gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
+            // self.gl.buffer_data_u8_slice(
+            //     glow::PIXEL_PACK_BUFFER,
+            //     &pixels,
+            //     glow::STREAM_READ,
+            // );
+            self.gl.read_pixels(
+                0,
+                0,
+                self.out_w,
+                self.out_h,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut pixels)),
+            );
+            Ok(pixels)
+        }
+    }
+
+    pub fn copy_to_mailbox(&self, mailbox: &PreviewMailbox) -> Result<(), String> {
+        let pixels = self.read_pixels()?;
+        let preview_frame = PreviewFrame {
+            width: self.out_w as u32,
+            height: self.out_h as u32,
+            rgba: Arc::from(pixels),
+            t_ns: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_nanos() as u64,
+        };
+        mailbox.update_frame(preview_frame);
+        Ok(())
+    }
+
     pub fn output_texture(&self) -> glow::NativeTexture {
         self.out_tex
+    }
+}
+
+impl Drop for GpuPipeline {
+    fn drop(&mut self) {
+        unsafe {
+            self.gl.delete_program(self.prog);
+            if let Some(prog_ext) = self.prog_external {
+                self.gl.delete_program(prog_ext);
+            }
+            self.gl.delete_vertex_array(self.vao);
+            self.gl.delete_buffer(self.vbo);
+            self.gl.delete_framebuffer(self.fbo);
+            self.gl.delete_texture(self.out_tex);
+        }
     }
 }
 

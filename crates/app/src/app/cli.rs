@@ -26,8 +26,8 @@ pub enum Commands {
     Record {
         #[command(flatten)]
         capture: CaptureArgs,
-        #[arg(long, default_value = "output.mp4")]
-        output: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Preview live frames until stopped
     Preview {
@@ -80,8 +80,6 @@ pub struct CaptureArgs {
     pub encoder_backend: EncoderBackend,
     #[arg(short = 'v', long, default_value_t = VideoCodec::H264)]
     pub video_codec: VideoCodec,
-    #[arg(short = 'm', long, default_value_t = false)]
-    pub mouse_tracking: bool,
     #[arg(long, default_value_t = false)]
     pub cursor_composition: bool,
     #[arg(long, help = "PNG sprite for live cursor composition")]
@@ -90,7 +88,7 @@ pub struct CaptureArgs {
     pub cursor_hotspot_x: i32,
     #[arg(long, default_value_t = 0, help = "Cursor hotspot Y in sprite pixels")]
     pub cursor_hotspot_y: i32,
-    #[arg(long, default_value_t = 1.0, help = "Cursor sprite scale factor")]
+    #[arg(long, default_value_t = 50.0, help = "Cursor sprite scale as percentage [1.0, 100.0]")]
     pub cursor_scale: f32,
     #[arg(long, default_value_t = false, help = "Enable cursor smoothing")]
     pub cursor_smooth: bool,
@@ -208,12 +206,70 @@ pub struct CaptureArgs {
         help = "Frequency to sync mouse tracking data to Wayland layer (in Hz)"
     )]
     pub wayland_sync_frequency: f64,
-    #[arg(
-        long,
-        default_value = "openstudio-cursor.bitcode",
-        help = "File path to write mouse tracking data to"
-    )]
-    pub mouse_tracking_file: String,
     #[arg(long, help = "Capture profile (hdr10, hdr, sdr)")]
     pub profile: Option<Profile>,
+    #[arg(
+        long,
+        help = "PNG image to composite as background behind the (zoomed) frame"
+    )]
+    pub background: Option<PathBuf>,
+    #[arg(
+        long = "background-zoom",
+        default_value_t = 85.0,
+        help = "Uniform scale applied to the source frame when --background is set [1.0, 100.0]"
+    )]
+    pub background_zoom: f32,
+}
+
+impl Default for CaptureArgs {
+    fn default() -> Self {
+        Self {
+            capture_backend: CaptureBackendKind::DrmKms,
+            card: None,
+            connector: None,
+            allow_fallback_connector: false,
+            fps: 60,
+            output_width: None,
+            output_height: None,
+            dump_frames: false,
+            dump_dir: PathBuf::from("./frames"),
+            dump_every: 30,
+            bitrate_kbps: 15000,
+            frame_rate_mode: FrameRateMode::Cfr,
+            bitrate_mode: BitrateMode::Default,
+            quality: QualityPreset::High,
+            color_range: ColorRange::Full,
+            colorimetry: Colorimetry::Bt709,
+            encoder_backend: EncoderBackend::Qsv,
+            video_codec: VideoCodec::H264,
+            cursor_composition: false,
+            cursor_sprite: None,
+            cursor_hotspot_x: 0,
+            cursor_hotspot_y: 0,
+            cursor_scale: 50.0,
+            cursor_smooth: false,
+            cursor_smear: false,
+            cursor_spring_k: 120.0,
+            cursor_spring_d: 18.0,
+            cursor_max_speed: 3000.0,
+            cursor_snap_px: 0.0,
+            cursor_smooth_ms: 12.0,
+            cursor_deadzone_px: 0.5,
+            cursor_smear_speed_threshold: 100.0,
+            cursor_smear_shutter_scale: 4.0,
+            cursor_smear_min_len: 4.0,
+            cursor_smear_max_len: 220.0,
+            cursor_smear_taps: 8,
+            cursor_smear_alpha_exp: 1.1,
+            cursor_smear_alpha_scale: 0.4,
+            cursor_smear_stretch_threshold: 300.0,
+            cursor_smear_stretch_range: 1800.0,
+            cursor_smear_max_stretch: 2.0,
+            cursor_smear_max_squash: 0.15,
+            wayland_sync_frequency: 0.5,
+            profile: None,
+            background: None,
+            background_zoom: 85.0,
+        }
+    }
 }

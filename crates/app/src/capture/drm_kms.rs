@@ -16,7 +16,7 @@ pub struct DrmKmsBackend {
 
 impl CaptureBackend for DrmKmsBackend {
     fn start(&mut self, options: &CaptureOptions) -> Result<(), EglError> {
-        let include_input_fds = options.mouse_tracking || options.cursor_composition;
+        let include_input_fds = options.cursor_composition;
         let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
             .map_err(|e| EglError::Pipeline(format!("failed to acquire device fds from privd: {e}")))?;
 
@@ -39,7 +39,7 @@ impl CaptureBackend for DrmKmsBackend {
         CaptureBackendKind::DrmKms
     }
 
-    fn next_frame(&mut self) -> Result<CaptureFrame, EglError> {
+    fn next_frame(&mut self, _timeout: std::time::Duration) -> Result<Option<CaptureFrame>, EglError> {
         let probe = self
             .probe
             .as_mut()
@@ -55,7 +55,7 @@ impl CaptureBackend for DrmKmsBackend {
             .map_err(|e| EglError::Pipeline(format!("privd framebuffer export failed: {e}")))?;
         let frame = exported.info;
 
-        Ok(CaptureFrame {
+        Ok(Some(CaptureFrame {
             fb_id: frame.fb_id,
             width: frame.width,
             height: frame.height,
@@ -72,11 +72,12 @@ impl CaptureBackend for DrmKmsBackend {
                 .iter()
                 .map(|v| (*v).max(0) as u32)
                 .collect(),
-        })
+        }))
     }
 
     fn stop(&mut self) -> Result<(), EglError> {
         self.probe = None;
+        drop(self.privd.take());
         self.privd = None;
         Ok(())
     }

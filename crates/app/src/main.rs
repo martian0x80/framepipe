@@ -1,19 +1,7 @@
 use clap::Parser;
 use eyre::Result;
 
-mod app;
-mod capture;
-mod cursor;
-mod drm_kms;
-mod encode;
-mod portal;
-mod shared;
-mod wayland;
-
 fn main() -> Result<()> {
-    env_logger::builder()
-        .format_timestamp_nanos()
-        .filter_level(log::LevelFilter::Debug)
-        .init();
-    app::run(app::cli::Cli::parse())
+    framepipe::init_logging("debug");
+    framepipe::run_cli(framepipe::app::cli::Cli::parse())
 }
