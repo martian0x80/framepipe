@@ -1485,6 +1485,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "framepipe-gui"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "chrono",
+ "clap",
+ "common",
+ "dirs",
+ "env_logger",
+ "framepipe",
+ "iced",
+ "log",
+ "rfd",
+ "wgpu 29.0.1",
+]
+
+[[package]]
 name = "framepipe-privd"
 version = "0.1.0"
 dependencies = [
@@ -2028,23 +2045,6 @@ dependencies = [
  "gstreamer-sys",
  "libc",
  "system-deps 7.0.7",
-]
-
-[[package]]
-name = "gui"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "chrono",
- "clap",
- "common",
- "dirs",
- "env_logger",
- "framepipe",
- "iced",
- "log",
- "rfd",
- "wgpu 29.0.1",
 ]
 
 [[package]]

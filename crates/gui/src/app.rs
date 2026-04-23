@@ -116,7 +116,7 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        let _ = env_logger::try_init();
+        framepipe::init_logging("info");
         let mut fixed = FixedOptions::default();
         fixed.source = SourceChoice::Portal;
 

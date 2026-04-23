@@ -1,6 +1,6 @@
 [package]
-name = "gui"
-version = "0.1.0"
+name = "framepipe-gui"
+version.workspace = true
 edition = "2024"
 
 [dependencies]

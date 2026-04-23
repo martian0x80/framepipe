@@ -4,6 +4,7 @@ use std::{
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
     rc::Rc,
     sync::{
+        Mutex, OnceLock,
         Arc,
         atomic::{AtomicBool, Ordering},
     },
@@ -12,6 +13,7 @@ use std::{
 
 use ashpd::desktop::{
     PersistMode,
+    Session,
     screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
 };
 use khronos_egl as egl;
@@ -42,39 +44,95 @@ pub enum Error {
 pub struct PortalPipeWireRemote {
     pub node_id: u32,
     pub fd: OwnedFd,
+    pub session: Session<Screencast>,
 }
 
 const DRM_FORMAT_MOD_INVALID: i64 = 0x00ff_ffff_ffff_ffff;
 
 #[derive(Clone)]
-pub(crate) struct FormatOffer {
+pub struct FormatOffer {
     format: pw::spa::param::video::VideoFormat,
     fourcc: u32,
     modifiers: Vec<i64>,
 }
 
-pub async fn screencast() -> eyre::Result<PortalPipeWireRemote> {
-    let proxy = Screencast::new().await.map_err(Error::Proxy)?;
+fn screencast_restore_token() -> &'static Mutex<Option<String>> {
+    static TOKEN: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    TOKEN.get_or_init(|| Mutex::new(None))
+}
+
+fn load_cached_restore_token() -> Option<String> {
+    screencast_restore_token()
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+}
+
+fn store_cached_restore_token(token: Option<String>) {
+    if let Ok(mut guard) = screencast_restore_token().lock() {
+        *guard = token;
+    }
+}
+
+async fn portal_connection() -> eyre::Result<zbus::Connection> {
+    // let conn = CONNECTION
+    //     .get_or_try_init(|| async {
+    //         log::debug!("establishing new zbus connection to portal");
+    //         zbus::Connection::session()
+    //             .await
+    //             .map_err(|e| eyre::eyre!("failed to establish zbus session connection: {e}"))
+    //     })
+    //     .await?;
+    zbus::Connection::session()
+        .await
+        .map_err(|e| eyre::eyre!("failed to establish zbus session connection: {e}"))
+
+    // Ok(conn.clone())
+}
+
+async fn screencast_with_restore_token(
+    restore_token: Option<String>,
+) -> eyre::Result<PortalPipeWireRemote> {
+    log::debug!("starting portal screencast session request");
+    // i have spent days on this stupid portal api, this call used to hang indefinitely on subsequent calls
+    // and it seems that was because ashpd was caching the zbus connection
+    // and lldb just commits sepukku if you try to break anywhere close to this
+    let proxy = tokio::time::timeout(
+        tokio::time::Duration::from_secs(5),
+        Screencast::with_connection(portal_connection().await?),
+        ).await??;
+    log::debug!("portal screencast proxy created");
     let session = proxy
         .create_session(Default::default())
         .await
         .map_err(Error::CreateSession)?;
+    log::debug!("portal screencast session created");
 
-    let select_opts = SelectSourcesOptions::default()
+    let mut select_opts = SelectSourcesOptions::default()
         .set_cursor_mode(CursorMode::Hidden)
         .set_sources(SourceType::Monitor | SourceType::Window)
         .set_multiple(false)
-        .set_persist_mode(PersistMode::DoNot);
+        .set_persist_mode(PersistMode::Application);
+    // todo: verify restore token works and persist it in XDG_CONFIG_HOME or something instead
+    if let Some(token) = restore_token.as_deref() {
+        select_opts = select_opts.set_restore_token(Some(token));
+        log::debug!("attempting screencast restore with cached restore token");
+    }
     proxy
         .select_sources(&session, select_opts)
         .await
         .map_err(Error::SelectSources)?;
+    log::info!("portal select_sources completed");
 
     let start_resp = proxy
         .start(&session, None, Default::default())
         .await
         .map_err(Error::Start)?;
     let start = start_resp.response().map_err(Error::StartResponse)?;
+    store_cached_restore_token(start.restore_token().map(ToOwned::to_owned));
+    if start.restore_token().is_some() {
+        log::debug!("received new screencast restore token from portal");
+    }
     let stream = start.streams().first().ok_or(Error::NoStreams)?;
     let node_id = stream.pipe_wire_node_id();
 
@@ -89,7 +147,25 @@ pub async fn screencast() -> eyre::Result<PortalPipeWireRemote> {
         fd.as_raw_fd()
     );
 
-    Ok(PortalPipeWireRemote { node_id, fd })
+    Ok(PortalPipeWireRemote {
+        node_id,
+        fd,
+        session,
+    })
+}
+
+pub async fn screencast() -> eyre::Result<PortalPipeWireRemote> {
+    let cached = load_cached_restore_token();
+    if cached.is_some() {
+        match screencast_with_restore_token(cached).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                log::warn!("restore-token screencast attempt failed, falling back to fresh selection: {e}");
+                store_cached_restore_token(None);
+            }
+        }
+    }
+    screencast_with_restore_token(None).await
 }
 
 pub async fn screencast_session(
@@ -98,15 +174,21 @@ pub async fn screencast_session(
     egl_display: egl::Display,
 ) -> eyre::Result<()> {
     let remote = screencast().await?;
-    run_pipewire_stream(
-        remote,
+    let run_result = run_pipewire_stream(
+        &remote,
         max_frames,
         Some(egl_i),
         Some(egl_display),
         None,
         None,
         None,
-    )
+    );
+    if let Err(e) = remote.session.close().await {
+        log::warn!("failed to close portal screencast session: {e}");
+    } else {
+        log::info!("portal screencast session closed");
+    }
+    run_result
 }
 
 fn fourcc(a: u8, b: u8, c: u8, d: u8) -> u32 {
@@ -322,16 +404,22 @@ fn build_enum_format_object(
 fn serialize_format_offers_to_bytes(offers: &[FormatOffer]) -> eyre::Result<Vec<Vec<u8>>> {
     let mut format_bytes = Vec::new();
     for offer in offers {
+        // Preferred: modifier-aware offer.
         format_bytes.push(serialize_object_to_bytes(build_enum_format_object(
             offer.format,
             &offer.modifiers,
+        ))?);
+        // Fallback: same format without modifiers.
+        format_bytes.push(serialize_object_to_bytes(build_enum_format_object(
+            offer.format,
+            &[],
         ))?);
     }
     Ok(format_bytes)
 }
 
 fn run_pipewire_stream(
-    remote: PortalPipeWireRemote,
+    remote: &PortalPipeWireRemote,
     max_frames: u32,
     _egl_i: Option<&egl::Instance<egl::Static>>,
     _egl_display: Option<egl::Display>,
@@ -343,7 +431,8 @@ fn run_pipewire_stream(
 
     let mainloop = pw::main_loop::MainLoopRc::new(None)?;
     let context = pw::context::ContextRc::new(&mainloop, None)?;
-    let core = context.connect_fd_rc(remote.fd, None)?;
+    let remote_fd = dup_fd_raw(remote.fd.as_raw_fd())?;
+    let core = context.connect_fd_rc(remote_fd, None)?;
 
     let stream_props = properties! {
         *pw::keys::MEDIA_TYPE => "Video",
@@ -642,6 +731,9 @@ fn run_pipewire_stream(
     );
 
     mainloop.run();
+    let _ = stream.set_active(false);
+    let _ = stream.disconnect();
+    let _ = drop(stream);
 
     if should_stop.load(Ordering::Acquire) {
         return Err(eyre::eyre!(
@@ -705,6 +797,10 @@ pub fn start_capture_producer(
     let ended_thread = Arc::clone(&ended);
     let failed_thread = Arc::clone(&failed);
     let handle = thread::spawn(move || {
+        log::info!(
+            "starting pipewire capture producer thread (format_offers={})",
+            format_offers.len()
+        );
         let rt = match tokio::runtime::Runtime::new() {
             Ok(v) => v,
             Err(e) => {
@@ -724,7 +820,7 @@ pub fn start_capture_producer(
             }
         };
         if let Err(e) = run_pipewire_stream(
-            remote,
+            &remote,
             u32::MAX,
             None,
             None,
@@ -734,6 +830,11 @@ pub fn start_capture_producer(
         ) {
             log::error!("pipewire producer stream error: {e}");
             failed_thread.store(true, Ordering::Release);
+        }
+        if let Err(e) = rt.block_on(remote.session.close()) {
+            log::warn!("failed to close portal screencast session: {e}");
+        } else {
+            log::info!("portal screencast session closed");
         }
         ended_thread.store(true, Ordering::Release);
     });
