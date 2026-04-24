@@ -67,7 +67,7 @@ pub fn start_embedded_preview(capture: CaptureArgs) -> Result<EmbeddedPreviewSes
     options.live_settings = Some(live_settings.clone());
 
     let control = CaptureControl::new_unregistered();
-    
+
     let worker_control = control.clone();
     let worker = thread::spawn(move || {
         capture::capture::run_capture_session(options, worker_control, backend)

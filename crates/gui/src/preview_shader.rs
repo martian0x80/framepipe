@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use iced::widget::shader::{self, Pipeline, Primitive};
-use iced::wgpu;
 use iced::Rectangle;
+use iced::wgpu;
+use iced::widget::shader::{self, Pipeline, Primitive};
 
 const PREVIEW_WGSL: &str = r#"
 struct VSOut {
@@ -312,7 +312,11 @@ impl Primitive for PreviewPrimitive {
         };
 
         let aspect_data: [f32; 4] = [tex_aspect, view_aspect, 0.0, 0.0];
-        queue.write_buffer(&pipeline.aspect_buffer, 0, bytemuck::cast_slice(&aspect_data));
+        queue.write_buffer(
+            &pipeline.aspect_buffer,
+            0,
+            bytemuck::cast_slice(&aspect_data),
+        );
 
         if pipeline.last_t_ns != frame.t_ns {
             queue.write_texture(
@@ -338,11 +342,7 @@ impl Primitive for PreviewPrimitive {
         }
     }
 
-    fn draw(
-        &self,
-        pipeline: &Self::Pipeline,
-        render_pass: &mut wgpu::RenderPass<'_>,
-    ) -> bool {
+    fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
         if self.frame.is_none() {
             return false;
         }

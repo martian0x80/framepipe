@@ -161,7 +161,7 @@ impl GpuPipeline {
         egl: &khronos_egl::Instance<khronos_egl::Static>,
         out_w: i32,
         out_h: i32,
-        profile: Profile
+        profile: Profile,
     ) -> Result<Self, String> {
         let gl = unsafe {
             glow::Context::from_loader_function(|s| {
@@ -362,11 +362,7 @@ impl GpuPipeline {
             if tex_err != glow::NO_ERROR {
                 return Err(format!(
                     "output texture allocation failed: profile={:?} internal=0x{:x} format=0x{:x} type=0x{:x} gl_error=0x{:x}",
-                    profile,
-                    internal_format,
-                    upload_format,
-                    upload_type,
-                    tex_err
+                    profile, internal_format, upload_format, upload_type, tex_err
                 ));
             }
             gl.tex_parameter_i32(
@@ -481,9 +477,7 @@ impl GpuPipeline {
                 tap_count,
             );
             self.gl.uniform_2_f32(
-                self.gl
-                    .get_uniform_location(program, "u_out_size")
-                    .as_ref(),
+                self.gl.get_uniform_location(program, "u_out_size").as_ref(),
                 self.out_w as f32,
                 self.out_h as f32,
             );
@@ -540,27 +534,31 @@ impl GpuPipeline {
             let zoom = frame_zoom.clamp(0.1, 1.0);
             let use_bg = bg_tex.is_some() as i32;
             self.gl.uniform_1_i32(
-                self.gl.get_uniform_location(program, "u_bg_enabled").as_ref(),
+                self.gl
+                    .get_uniform_location(program, "u_bg_enabled")
+                    .as_ref(),
                 use_bg,
             );
             self.gl.uniform_1_f32(
-                self.gl.get_uniform_location(program, "u_frame_zoom").as_ref(),
+                self.gl
+                    .get_uniform_location(program, "u_frame_zoom")
+                    .as_ref(),
                 zoom,
             );
             // Center the shrunken frame: offset = (1 - zoom) / 2 on each axis.
             let offset = (1.0 - zoom) * 0.5;
             self.gl.uniform_2_f32(
-                self.gl.get_uniform_location(program, "u_frame_offset").as_ref(),
+                self.gl
+                    .get_uniform_location(program, "u_frame_offset")
+                    .as_ref(),
                 offset,
                 offset,
             );
             if let Some(bgtex) = bg_tex {
                 self.gl.active_texture(glow::TEXTURE2);
                 self.gl.bind_texture(glow::TEXTURE_2D, Some(bgtex));
-                self.gl.uniform_1_i32(
-                    self.gl.get_uniform_location(program, "u_bg").as_ref(),
-                    2,
-                );
+                self.gl
+                    .uniform_1_i32(self.gl.get_uniform_location(program, "u_bg").as_ref(), 2);
             }
 
             self.gl.bind_vertex_array(Some(self.vao));
@@ -583,10 +581,7 @@ impl GpuPipeline {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
             let fbo_status = self.gl.check_framebuffer_status(glow::FRAMEBUFFER);
             if fbo_status != glow::FRAMEBUFFER_COMPLETE {
-                return Err(format!(
-                    "FBO incomplete: status=0x{:x}",
-                    fbo_status
-                ));
+                return Err(format!("FBO incomplete: status=0x{:x}", fbo_status));
             }
             // RGBA8 only readback for now
             let mut pixels = vec![0u8; (self.out_w * self.out_h * 4) as usize];

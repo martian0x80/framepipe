@@ -1,9 +1,14 @@
 use glow::{HasContext, NativeTexture};
 use std::{
-    fs, num::NonZero, ops::Div as _, path::{Path, PathBuf}, sync::{Arc, atomic::Ordering}, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
+    fs,
+    num::NonZero,
+    ops::Div as _,
+    path::{Path, PathBuf},
+    sync::{Arc, atomic::Ordering},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{app::signals::CaptureControl, drm_kms::types::Profile, portal::notifs::ProcessState};
 use crate::capture::backend::CaptureBackend;
 use crate::cursor::cursor::*;
 use crate::drm_kms::{
@@ -14,6 +19,7 @@ use crate::drm_kms::{
 use crate::shared::mouse_ring::RingBuffer;
 use crate::wayland::layer::{TrackingControl, init_wayland};
 use crate::wayland::types::MouseTrackRecordingInfo;
+use crate::{app::signals::CaptureControl, drm_kms::types::Profile, portal::notifs::ProcessState};
 
 use crate::drm_kms::egl_context::{
     EglCtx, EglError, delete_gl_texture, import_capture_frame_texture, init_egl,
@@ -31,8 +37,7 @@ pub fn run_capture_session(
         options.fps
     );
     let use_mouse_tracking =
-        (options.cursor_composition)
-            && !matches!(options.output, CaptureOutput::EmbeddedPreview);
+        (options.cursor_composition) && !matches!(options.output, CaptureOutput::EmbeddedPreview);
     let input_fds_for_tracker = if use_mouse_tracking {
         backend.take_input_fds()
     } else {
@@ -131,7 +136,8 @@ pub fn run_capture_session(
             }
         }
     }
-    let first_frame = first_frame.ok_or_else(|| EglError::Pipeline("Capture stopped before first frame".to_string()))?;
+    let first_frame = first_frame
+        .ok_or_else(|| EglError::Pipeline("Capture stopped before first frame".to_string()))?;
     log::debug!("backend returned first frame, importing texture");
     let (texture, initial_source_w, initial_source_h, mut prev_fb_id, first_use_external_texture) =
         import_capture_frame_texture(first_frame, &egl, display).map_err(|e| {
@@ -193,8 +199,15 @@ pub fn run_capture_session(
     let mut pipelines: Vec<gpu_pipeline::GpuPipeline> = Vec::with_capacity(inflight_slots);
     for _ in 0..inflight_slots {
         pipelines.push(
-            unsafe { gpu_pipeline::GpuPipeline::new(&egl, output_w, output_h, options.profile.unwrap_or(Profile::Sdr)) }
-                .map_err(EglError::Pipeline)?,
+            unsafe {
+                gpu_pipeline::GpuPipeline::new(
+                    &egl,
+                    output_w,
+                    output_h,
+                    options.profile.unwrap_or(Profile::Sdr),
+                )
+            }
+            .map_err(EglError::Pipeline)?,
         );
     }
 
@@ -203,8 +216,8 @@ pub fn run_capture_session(
     let (cursor_tex, cursor_w, cursor_h, hotspot_x, hotspot_y) = if options.cursor_composition {
         let (tex, base_w, base_h, auto_hotspot) =
             if let Some(sprite_path) = options.cursor_sprite.as_ref() {
-                let (tex, w, h) = load_rgba_texture(&pipelines[0].gl, sprite_path)
-                    .map_err(EglError::Pipeline)?;
+                let (tex, w, h) =
+                    load_rgba_texture(&pipelines[0].gl, sprite_path).map_err(EglError::Pipeline)?;
                 // Large cursor atlases are commonly centered with transparent borders.
                 // let auto_hotspot = if options.cursor_hotspot_x == 0 && options.cursor_hotspot_y == 0 {
                 //     Some((w * 0.5_f32, h * 0.5_f32))
@@ -254,8 +267,8 @@ pub fn run_capture_session(
             NativeTexture(NonZero::new(texture).unwrap()),
             first_use_external_texture,
             &cursor_state_empty,
-            None,  // no background yet
-            1.0,   // no frame zoom
+            None, // no background yet
+            1.0,  // no frame zoom
         )
     }
     .map_err(EglError::Pipeline)?;
@@ -381,8 +394,11 @@ pub fn run_capture_session(
                     cursor_h = h;
                     log::info!(
                         "Live cursor sprite reloaded: {:?} ({}x{})",
-                        live.cursor_sprite.as_deref().unwrap_or(std::path::Path::new("<default>")),
-                        w, h
+                        live.cursor_sprite
+                            .as_deref()
+                            .unwrap_or(std::path::Path::new("<default>")),
+                        w,
+                        h
                     );
                 }
                 Err(e) => log::warn!("Failed to reload cursor sprite: {}", e),
@@ -443,17 +459,17 @@ pub fn run_capture_session(
             }
         };
 
-        let (frame_texture, frame_w, frame_h, fb_id, use_external_texture) = match import_capture_frame_texture(frame, &egl, display)
-        {
-            Ok(v) => v,
-            Err(e) => {
-                if control.stop_requested.load(Ordering::Relaxed) {
-                    log::info!("Capture stopping; ignoring late frame import error: {}", e);
-                    break;
+        let (frame_texture, frame_w, frame_h, fb_id, use_external_texture) =
+            match import_capture_frame_texture(frame, &egl, display) {
+                Ok(v) => v,
+                Err(e) => {
+                    if control.stop_requested.load(Ordering::Relaxed) {
+                        log::info!("Capture stopping; ignoring late frame import error: {}", e);
+                        break;
+                    }
+                    return Err(e);
                 }
-                return Err(e);
-            }
-        };
+            };
         if frame_w != source_w || frame_h != source_h {
             log::warn!(
                 "capture source size changed from {}x{} to {}x{}; keeping encoder output at {}x{}",
@@ -534,8 +550,8 @@ pub fn run_capture_session(
                         let vy = (s_cursor_y - prev_y) / vdt;
                         let speed = (vx * vx + vy * vy).sqrt();
                         if speed > live.cursor_smear_speed_threshold.max(0.0) {
-                            let shutter_seconds =
-                                (1.0 / live.fps.max(1) as f32) * live.cursor_smear_shutter_scale.max(0.0);
+                            let shutter_seconds = (1.0 / live.fps.max(1) as f32)
+                                * live.cursor_smear_shutter_scale.max(0.0);
                             let min_len = live.cursor_smear_min_len.max(0.0);
                             let max_len = live.cursor_smear_max_len.max(min_len);
                             let blur_len = (speed * shutter_seconds).clamp(min_len, max_len);
@@ -560,8 +576,7 @@ pub fn run_capture_session(
                             let stretch_range = live.cursor_smear_stretch_range.max(1.0);
                             let s = ((speed - stretch_threshold) / stretch_range).clamp(0.0, 1.0);
                             motion_stretch = 1.0 + live.cursor_smear_max_stretch.max(0.0) * s;
-                            motion_squash =
-                                1.0 - live.cursor_smear_max_squash.clamp(0.0, 0.95) * s;
+                            motion_squash = 1.0 - live.cursor_smear_max_squash.clamp(0.0, 0.95) * s;
                         }
                     }
                 }
@@ -598,8 +613,16 @@ pub fn run_capture_session(
         };
 
         let slot = (frame_idx as usize) % pipelines.len();
-        let bg = if live.background_enabled { live_bg_tex } else { None };
-        let zoom = if live.background_enabled { live.background_zoom.clamp(1.0, 100.0).div(100.0) } else { 1.0 };
+        let bg = if live.background_enabled {
+            live_bg_tex
+        } else {
+            None
+        };
+        let zoom = if live.background_enabled {
+            live.background_zoom.clamp(1.0, 100.0).div(100.0)
+        } else {
+            1.0
+        };
         let fence = unsafe {
             pipelines[slot].render_with_cursor(
                 NativeTexture(NonZero::new(frame_texture).unwrap()),
@@ -636,7 +659,10 @@ pub fn run_capture_session(
                     .map_err(|e| EglError::Pipeline(e.to_string()))?;
             }
             // for debug
-            preview_mailbox.as_ref().unwrap().get_frame()
+            preview_mailbox
+                .as_ref()
+                .unwrap()
+                .get_frame()
                 .map(|f| log::trace!("Updated preview mailbox with frame t_ns={}", f.t_ns));
             let _ = delete_gl_texture(&egl, frame_texture);
             frame_idx += 1;
@@ -648,7 +674,7 @@ pub fn run_capture_session(
             // skip the encoder, since the ui handles rendering directly
             continue;
         }
-        
+
         let exported = unsafe {
             egl_dmabuf_export::export_rgba_tex_to_dmabuf(
                 &egl,
@@ -729,22 +755,26 @@ pub fn run_capture_session(
             .map_err(|e: crate::encode::EncodeError| EglError::Pipeline(e.to_string()))?;
     }
 
-    log::info!(
-        "Shutdown summary: frames_emitted={}",
-        frame_idx,
-    );
+    log::info!("Shutdown summary: frames_emitted={}", frame_idx,);
 
     match &options.output {
         CaptureOutput::Preview | CaptureOutput::EmbeddedPreview => {
             log::info!("Preview stopped");
-            backend.send_notification(ProcessState::Stopped(None), 3).ok();
-        },
+            backend
+                .send_notification(ProcessState::Stopped(None), 3)
+                .ok();
+        }
         CaptureOutput::File(path) => {
             log::info!(
                 "Video encoding complete, output saved to {}",
                 path.to_string_lossy()
             );
-            backend.send_notification(ProcessState::Stopped(Some(path.to_string_lossy().into())), 3).ok();
+            backend
+                .send_notification(
+                    ProcessState::Stopped(Some(path.to_string_lossy().into())),
+                    3,
+                )
+                .ok();
         }
     }
 

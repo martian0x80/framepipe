@@ -141,17 +141,20 @@ impl App {
             paused: false,
             ui_tick: 0,
             theme: Some(Theme::Moonfly),
-            background_cache: Some(iced::widget::image::Handle::from_path("assets/grainy_bg1.png")),
+            background_cache: Some(iced::widget::image::Handle::from_path(
+                "assets/grainy_bg1.png",
+            )),
         }
     }
 
-    pub fn btn<'a>(content: impl Into<iced::Element<'a, Message>>) -> iced::widget::Button<'a, Message> {
-        iced::widget::button(content)
-            .style(|theme, status| {
-                let mut style = iced::widget::button::primary(theme, status);
-                style.border.radius = 8.0.into();
-                style
-            })
+    pub fn btn<'a>(
+        content: impl Into<iced::Element<'a, Message>>,
+    ) -> iced::widget::Button<'a, Message> {
+        iced::widget::button(content).style(|theme, status| {
+            let mut style = iced::widget::button::primary(theme, status);
+            style.border.radius = 8.0.into();
+            style
+        })
     }
 
     pub fn theme(&self) -> Option<Theme> {
@@ -174,9 +177,10 @@ impl App {
     fn build_capture_args(&self) -> CaptureArgs {
         let mut args = CaptureArgs::default();
         args.capture_backend = self.fixed.source.to_backend();
-        args.card = (!self.fixed.card.trim().is_empty()).then(|| self.fixed.card.trim().to_string());
-        args.connector =
-            (!self.fixed.connector.trim().is_empty()).then(|| self.fixed.connector.trim().to_string());
+        args.card =
+            (!self.fixed.card.trim().is_empty()).then(|| self.fixed.card.trim().to_string());
+        args.connector = (!self.fixed.connector.trim().is_empty())
+            .then(|| self.fixed.connector.trim().to_string());
         args.allow_fallback_connector = self.fixed.allow_fallback_connector;
         args.fps = self.live.fps.max(1);
         args.output_width = Self::parse_opt_u32(&self.fixed.output_width);
@@ -374,14 +378,18 @@ impl App {
                 let args = self.build_capture_args();
                 let backend = args.capture_backend;
 
-                match framepipe::app::config::build_capture_options(args, framepipe::drm_kms::types::CaptureOutput::File(output.clone())) {
+                match framepipe::app::config::build_capture_options(
+                    args,
+                    framepipe::drm_kms::types::CaptureOutput::File(output.clone()),
+                ) {
                     Ok(options) => {
                         self.mode = AppMode::Recording;
                         self.record_started_at = Some(Instant::now());
                         self.status = format!("Recording to {}", output.display());
                         self.record_control = Some(control.clone());
                         self.record_thread = Some(std::thread::spawn(move || {
-                            let _ = framepipe::app::app::RecordingSession::new(options, backend).map(|s| s.run(control));
+                            let _ = framepipe::app::app::RecordingSession::new(options, backend)
+                                .map(|s| s.run(control));
                         }));
                     }
                     Err(e) => {
@@ -394,14 +402,20 @@ impl App {
                 self.mode = AppMode::Idle;
                 self.record_started_at = None;
                 if let Some(control) = self.record_control.take() {
-                    control.stop_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                    control
+                        .stop_requested
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
                 }
                 if let Some(thread) = self.record_thread.take() {
                     let _ = thread.join();
                 }
                 self.status = format!(
                     "Recording stopped. Output target: {}",
-                    self.fixed.output_path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "Dynamic".to_string())
+                    self.fixed
+                        .output_path
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "Dynamic".to_string())
                 );
                 Task::none()
             }
@@ -455,8 +469,9 @@ impl App {
                 self.mark_fixed_changed();
                 Task::none()
             }
-            Message::PickDumpDir => Task::future(rfd::AsyncFileDialog::new().pick_folder())
-                .map(Message::DumpDirPicked),
+            Message::PickDumpDir => {
+                Task::future(rfd::AsyncFileDialog::new().pick_folder()).map(Message::DumpDirPicked)
+            }
             Message::DumpDirPicked(handle) => {
                 if let Some(file) = handle {
                     self.fixed.dump_dir = file.path().to_path_buf();
@@ -707,11 +722,13 @@ impl App {
             Message::TogglePausePreview => {
                 if let Some(ctrl) = &self.preview_control {
                     if self.paused {
-                        ctrl.paused.store(false, std::sync::atomic::Ordering::Relaxed);
+                        ctrl.paused
+                            .store(false, std::sync::atomic::Ordering::Relaxed);
                         self.paused = false;
                         self.status = "Preview resumed".to_string();
                     } else {
-                        ctrl.paused.store(true, std::sync::atomic::Ordering::Relaxed);
+                        ctrl.paused
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                         self.paused = true;
                         self.status = "Preview paused".to_string();
                     }
@@ -721,11 +738,20 @@ impl App {
             Message::TogglePauseRecording => {
                 if let Some(ctrl) = &self.record_control {
                     if self.paused {
-                        ctrl.paused.store(false, std::sync::atomic::Ordering::Relaxed);
+                        ctrl.paused
+                            .store(false, std::sync::atomic::Ordering::Relaxed);
                         self.paused = false;
-                        self.status = format!("Recording to {}", self.fixed.output_path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "Dynamic".to_string()));
+                        self.status = format!(
+                            "Recording to {}",
+                            self.fixed
+                                .output_path
+                                .as_ref()
+                                .map(|p| p.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "Dynamic".to_string())
+                        );
                     } else {
-                        ctrl.paused.store(true, std::sync::atomic::Ordering::Relaxed);
+                        ctrl.paused
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                         self.paused = true;
                         self.status = "Recording paused".to_string();
                     }

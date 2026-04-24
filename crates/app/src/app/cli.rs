@@ -88,7 +88,11 @@ pub struct CaptureArgs {
     pub cursor_hotspot_x: i32,
     #[arg(long, default_value_t = 0, help = "Cursor hotspot Y in sprite pixels")]
     pub cursor_hotspot_y: i32,
-    #[arg(long, default_value_t = 50.0, help = "Cursor sprite scale as percentage [1.0, 100.0]")]
+    #[arg(
+        long,
+        default_value_t = 50.0,
+        help = "Cursor sprite scale as percentage [1.0, 100.0]"
+    )]
     pub cursor_scale: f32,
     #[arg(long, default_value_t = false, help = "Enable cursor smoothing")]
     pub cursor_smooth: bool,

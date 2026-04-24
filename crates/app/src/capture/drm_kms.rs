@@ -1,7 +1,8 @@
 use crate::{
     capture::types::CaptureFrame,
     drm_kms::{
-        egl_context::EglError, privd, privd::PrivdSession, probe::ProbeSession, types::CaptureOptions,
+        egl_context::EglError, privd, privd::PrivdSession, probe::ProbeSession,
+        types::CaptureOptions,
     },
 };
 use std::os::fd::AsRawFd;
@@ -18,7 +19,9 @@ impl CaptureBackend for DrmKmsBackend {
     fn start(&mut self, options: &CaptureOptions) -> Result<(), EglError> {
         let include_input_fds = options.cursor_composition;
         let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
-            .map_err(|e| EglError::Pipeline(format!("failed to acquire device fds from privd: {e}")))?;
+            .map_err(|e| {
+                EglError::Pipeline(format!("failed to acquire device fds from privd: {e}"))
+            })?;
 
         let drm_fd = dup_fd(privd_session.drm_fd.as_raw_fd())
             .map_err(|e| EglError::Pipeline(format!("failed to dup drm fd from privd: {e}")))?;
@@ -39,15 +42,16 @@ impl CaptureBackend for DrmKmsBackend {
         CaptureBackendKind::DrmKms
     }
 
-    fn next_frame(&mut self, _timeout: std::time::Duration) -> Result<Option<CaptureFrame>, EglError> {
-        let probe = self
-            .probe
-            .as_mut()
-            .ok_or_else(|| EglError::Pipeline("DRM backend not started (probe missing)".to_string()))?;
-        let privd = self
-            .privd
-            .as_mut()
-            .ok_or_else(|| EglError::Pipeline("DRM backend not started (privd missing)".to_string()))?;
+    fn next_frame(
+        &mut self,
+        _timeout: std::time::Duration,
+    ) -> Result<Option<CaptureFrame>, EglError> {
+        let probe = self.probe.as_mut().ok_or_else(|| {
+            EglError::Pipeline("DRM backend not started (probe missing)".to_string())
+        })?;
+        let privd = self.privd.as_mut().ok_or_else(|| {
+            EglError::Pipeline("DRM backend not started (privd missing)".to_string())
+        })?;
 
         let probed = probe.capture_frame().map_err(EglError::Probe)?;
         let exported = privd
@@ -62,16 +66,8 @@ impl CaptureBackend for DrmKmsBackend {
             fourcc: frame.fourcc,
             modifier: frame.modifier,
             plane_fds: exported.fds,
-            offsets: frame
-                .offsets
-                .iter()
-                .map(|v| (*v).max(0) as u32)
-                .collect(),
-            strides: frame
-                .strides
-                .iter()
-                .map(|v| (*v).max(0) as u32)
-                .collect(),
+            offsets: frame.offsets.iter().map(|v| (*v).max(0) as u32).collect(),
+            strides: frame.strides.iter().map(|v| (*v).max(0) as u32).collect(),
         }))
     }
 
@@ -82,8 +78,12 @@ impl CaptureBackend for DrmKmsBackend {
         Ok(())
     }
 
-    fn take_input_fds(&mut self) -> Option<std::collections::HashMap<std::path::PathBuf, std::os::fd::OwnedFd>> {
-        self.privd.as_mut().map(|s| std::mem::take(&mut s.input_fds))
+    fn take_input_fds(
+        &mut self,
+    ) -> Option<std::collections::HashMap<std::path::PathBuf, std::os::fd::OwnedFd>> {
+        self.privd
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.input_fds))
     }
 }
 

@@ -34,13 +34,15 @@ impl PipeWireFrameRing {
         let write = self.write_idx.load(Ordering::Relaxed);
         let read = self.read_idx.load(Ordering::Acquire);
         if write.saturating_sub(read) >= self.capacity {
-            self.read_idx.store(read.saturating_add(1), Ordering::Release);
+            self.read_idx
+                .store(read.saturating_add(1), Ordering::Release);
         }
         let slot = write & (self.capacity - 1);
         unsafe {
             *self.buffer[slot as usize].get() = Some(frame);
         }
-        self.write_idx.store(write.saturating_add(1), Ordering::Release);
+        self.write_idx
+            .store(write.saturating_add(1), Ordering::Release);
     }
 
     pub fn pop_latest(&self) -> Option<CaptureFrame> {

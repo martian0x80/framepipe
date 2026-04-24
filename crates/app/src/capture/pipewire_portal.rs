@@ -1,5 +1,10 @@
-use std::{os::fd::{AsRawFd, FromRawFd, OwnedFd}, sync::Arc, thread, time::Duration};
 use khronos_egl as egl;
+use std::{
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    sync::Arc,
+    thread,
+    time::Duration,
+};
 
 use crate::{
     capture::types::CaptureFrame,
@@ -31,14 +36,16 @@ impl CaptureBackend for PipeWirePortalBackend {
         let include_input_fds = options.cursor_composition;
         if include_input_fds {
             let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
-                .map_err(|e| EglError::Pipeline(format!("failed to acquire device fds from privd: {e}")))?;
+                .map_err(|e| {
+                    EglError::Pipeline(format!("failed to acquire device fds from privd: {e}"))
+                })?;
             self.privd = Some(privd_session);
         } else {
             self.privd = None;
         }
         Ok(())
     }
-    
+
     fn on_egl_ready(
         &mut self,
         egl_i: &egl::Instance<egl::Static>,
@@ -47,10 +54,9 @@ impl CaptureBackend for PipeWirePortalBackend {
         if self.producer.is_some() {
             return Ok(());
         }
-        let ring = self
-            .ring
-            .as_ref()
-            .ok_or_else(|| EglError::Pipeline("pipewire backend ring not initialized".to_string()))?;
+        let ring = self.ring.as_ref().ok_or_else(|| {
+            EglError::Pipeline("pipewire backend ring not initialized".to_string())
+        })?;
         let offers = build_pipewire_format_offers_for_session(egl_i, display);
         let producer = start_capture_producer(Arc::clone(ring), offers)
             .map_err(|e| EglError::Pipeline(format!("failed to start pipewire producer: {e}")))?;
@@ -79,7 +85,12 @@ impl CaptureBackend for PipeWirePortalBackend {
             while !self.first_frame_seen {
                 if let Some(frame) = ring.pop_latest() {
                     self.first_frame_seen = true;
-                    log::info!("first pipewire frame received: {}x{} format={}", frame.width, frame.height, frame.fourcc);
+                    log::info!(
+                        "first pipewire frame received: {}x{} format={}",
+                        frame.width,
+                        frame.height,
+                        frame.fourcc
+                    );
                     self.last_frame = Some(dup_capture_frame(&frame)?);
                     return Ok(Some(frame));
                 }
@@ -130,8 +141,12 @@ impl CaptureBackend for PipeWirePortalBackend {
         Ok(())
     }
 
-    fn take_input_fds(&mut self) -> Option<std::collections::HashMap<std::path::PathBuf, std::os::fd::OwnedFd>> {
-        self.privd.as_mut().map(|s| std::mem::take(&mut s.input_fds))
+    fn take_input_fds(
+        &mut self,
+    ) -> Option<std::collections::HashMap<std::path::PathBuf, std::os::fd::OwnedFd>> {
+        self.privd
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.input_fds))
     }
 }
 
@@ -146,9 +161,8 @@ fn dup_fd_raw(raw_fd: i32) -> std::io::Result<OwnedFd> {
 fn dup_capture_frame(frame: &CaptureFrame) -> Result<CaptureFrame, EglError> {
     let mut fds = Vec::with_capacity(frame.plane_fds.len());
     for fd in &frame.plane_fds {
-        let dup = dup_fd_raw(fd.as_raw_fd()).map_err(|e| {
-            EglError::Pipeline(format!("failed to dup pipewire frame fd: {e}"))
-        })?;
+        let dup = dup_fd_raw(fd.as_raw_fd())
+            .map_err(|e| EglError::Pipeline(format!("failed to dup pipewire frame fd: {e}")))?;
         fds.push(dup);
     }
     Ok(CaptureFrame {

@@ -31,7 +31,10 @@ pub struct PrivdSession {
 
 impl Drop for PrivdSession {
     fn drop(&mut self) {
-        log::debug!("privd session drop: sending stop to child pid={}", self.child.id());
+        log::debug!(
+            "privd session drop: sending stop to child pid={}",
+            self.child.id()
+        );
         let _ = send_packet(&self.stream, &IpcRequest::Stop, &[]);
         let deadline = Instant::now() + Duration::from_millis(500);
         loop {

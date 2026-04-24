@@ -1,14 +1,14 @@
-use iced::widget::scrollable::Scrollbar;
-use iced::widget::{
-    button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
-};
-use iced::{Alignment, Element, Length};
 use crate::app::{App, Message};
 use crate::model::{
     BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
     FrameRateModeChoice, ProfileChoice, QualityChoice, SourceChoice,
 };
 use crate::theme::get_all_themes;
+use iced::widget::scrollable::Scrollbar;
+use iced::widget::{
+    button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
+};
+use iced::{Alignment, Element, Length};
 
 impl App {
     fn section_heading(title: &str) -> iced::widget::Text<'_> {
@@ -26,7 +26,7 @@ impl App {
                         background: Some(p.secondary.strong.color.into()),
                         ..Default::default()
                     }
-                })
+                }),
         )
         .padding([4, 6])
         .into()
@@ -34,7 +34,11 @@ impl App {
 
     fn action_buttons(&self) -> Element<'_, Message> {
         if matches!(self.mode, crate::model::AppMode::Recording) {
-            let pause_label = if self.paused { "Resume Recording" } else { "Pause Recording" };
+            let pause_label = if self.paused {
+                "Resume Recording"
+            } else {
+                "Pause Recording"
+            };
             return column![
                 App::btn(text("Stop Recording").size(26))
                     .padding([16, 18])
@@ -73,7 +77,11 @@ impl App {
         .spacing(8);
 
         if matches!(self.mode, crate::model::AppMode::Preview) {
-            let pause_label = if self.paused { "Resume Preview" } else { "Pause Preview" };
+            let pause_label = if self.paused {
+                "Resume Preview"
+            } else {
+                "Pause Preview"
+            };
             col = col.push(
                 App::btn(text(pause_label).size(16))
                     .padding([8, 12])
@@ -172,20 +180,21 @@ impl App {
             .align_y(Alignment::Center),
             row![
                 text("Output"),
-                container(text(match &self.fixed.output_path {
-                    Some(path) => Self::short_path(Some(path)),
-                    None => {
-                        match dirs::video_dir() {
-                            Some(v) => format!("{}/framepipe_record_<time>.mp4", v.display()),
-                            None => "framepipe_record_<time>.mp4".to_string(),
+                container(
+                    text(match &self.fixed.output_path {
+                        Some(path) => Self::short_path(Some(path)),
+                        None => {
+                            match dirs::video_dir() {
+                                Some(v) => format!("{}/framepipe_record_<time>.mp4", v.display()),
+                                None => "framepipe_record_<time>.mp4".to_string(),
+                            }
                         }
-                    }
-                }).size(13))
-                    .width(Length::Fill),
-                App::btn("Browse")
-                    .on_press_maybe((!disabled).then_some(Message::PickOutputPath)),
-                App::btn("Clear")
-                    .on_press_maybe((!disabled).then_some(Message::OutputPathCleared)),
+                    })
+                    .size(13)
+                )
+                .width(Length::Fill),
+                App::btn("Browse").on_press_maybe((!disabled).then_some(Message::PickOutputPath)),
+                App::btn("Clear").on_press_maybe((!disabled).then_some(Message::OutputPathCleared)),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -197,11 +206,10 @@ impl App {
                     .width(Length::Fill),
                 App::btn("Browse")
                     .on_press_maybe((!disabled).then_some(Message::PickBackgroundImage)),
-                App::btn("Clear")
-                    .on_press_maybe((!disabled).then_some(Message::BackgroundClear)),
+                App::btn("Clear").on_press_maybe((!disabled).then_some(Message::BackgroundClear)),
             ]
             .spacing(8)
-            .align_y(Alignment::Center),            
+            .align_y(Alignment::Center),
         ]
         .spacing(10);
 
@@ -210,8 +218,12 @@ impl App {
             controls = controls.push(
                 row![
                     text(format!("Background Zoom {:.2}", self.live.background_zoom)),
-                    slider(1.0..=100.0, self.live.background_zoom, Message::BackgroundZoomChanged)
-                        .width(Length::Fill),
+                    slider(
+                        1.0..=100.0,
+                        self.live.background_zoom,
+                        Message::BackgroundZoomChanged
+                    )
+                    .width(Length::Fill),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -228,7 +240,6 @@ impl App {
             ]
             .spacing(8),
         );
-        
 
         if self.fixed.cursor_composition {
             controls = controls.push(
@@ -242,7 +253,7 @@ impl App {
                         .on_press_maybe((!disabled).then_some(Message::CursorSpriteClear)),
                 ]
                 .spacing(8)
-                .align_y(Alignment::Center)
+                .align_y(Alignment::Center),
             );
             controls = controls.push(
                 row![
@@ -261,8 +272,12 @@ impl App {
             controls = controls.push(
                 row![
                     text(format!("Scale {:.2}", self.live.cursor_scale)),
-                    slider(0.0..=100.0, self.live.cursor_scale, Message::CursorScaleChanged)
-                        .width(Length::Fill),
+                    slider(
+                        0.0..=100.0,
+                        self.live.cursor_scale,
+                        Message::CursorScaleChanged
+                    )
+                    .width(Length::Fill),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -277,12 +292,8 @@ impl App {
                 .spacing(8)
                 .align_y(Alignment::Center),
             );
-            controls = controls.push(
-                Self::inset_divider()
-            );
-            controls = controls.push(
-                Self::section_heading("Live Effects"),
-            );
+            controls = controls.push(Self::inset_divider());
+            controls = controls.push(Self::section_heading("Live Effects"));
             controls = controls.push(
                 row![
                     toggler(self.live.cursor_smooth)
@@ -292,56 +303,86 @@ impl App {
                         .label("Cursor Smear")
                         .on_toggle_maybe((!disabled).then_some(Message::CursorSmearToggled)),
                 ]
-                .spacing(8)
+                .spacing(8),
             );
             if self.live.cursor_smooth {
                 controls = controls.push(
                     column![
                         row![
                             text("Smooth K"),
-                            slider(1.0..=800.0, self.live.cursor_spring_k, Message::CursorSpringKChanged)
-                                .width(Length::Fill),
-                            text(format!("{:.1}", self.live.cursor_spring_k)).width(Length::Fixed(56.0)),
+                            slider(
+                                1.0..=800.0,
+                                self.live.cursor_spring_k,
+                                Message::CursorSpringKChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{:.1}", self.live.cursor_spring_k))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Smooth D"),
-                            slider(1.0..=100.0, self.live.cursor_spring_d, Message::CursorSpringDChanged)
-                                .width(Length::Fill),
-                            text(format!("{:.1}", self.live.cursor_spring_d)).width(Length::Fixed(56.0)),
+                            slider(
+                                1.0..=100.0,
+                                self.live.cursor_spring_d,
+                                Message::CursorSpringDChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{:.1}", self.live.cursor_spring_d))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Max speed"),
-                            slider(100.0..=10000.0, self.live.cursor_max_speed, Message::CursorMaxSpeedChanged)
-                                .width(Length::Fill),
-                            text(format!("{:.0}", self.live.cursor_max_speed)).width(Length::Fixed(56.0)),
+                            slider(
+                                100.0..=10000.0,
+                                self.live.cursor_max_speed,
+                                Message::CursorMaxSpeedChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{:.0}", self.live.cursor_max_speed))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Snap px"),
-                            slider(0.0..=200.0, self.live.cursor_snap_px, Message::CursorSnapPxChanged)
-                                .width(Length::Fill),
-                            text(format!("{:.1}", self.live.cursor_snap_px)).width(Length::Fixed(56.0)),
+                            slider(
+                                0.0..=200.0,
+                                self.live.cursor_snap_px,
+                                Message::CursorSnapPxChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{:.1}", self.live.cursor_snap_px))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Smooth ms"),
-                            slider(1.0..=60.0, self.live.cursor_smooth_ms, Message::CursorSmoothMsChanged)
-                                .width(Length::Fill),
-                            text(format!("{:.1}", self.live.cursor_smooth_ms)).width(Length::Fixed(56.0)),
+                            slider(
+                                1.0..=60.0,
+                                self.live.cursor_smooth_ms,
+                                Message::CursorSmoothMsChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{:.1}", self.live.cursor_smooth_ms))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Deadzone"),
-                            slider(0.0..=10.0, self.live.cursor_deadzone_px, Message::CursorDeadzonePxChanged)
-                                .width(Length::Fill),
-                            text(format!("{:.2}", self.live.cursor_deadzone_px)).width(Length::Fixed(56.0)),
+                            slider(
+                                0.0..=10.0,
+                                self.live.cursor_deadzone_px,
+                                Message::CursorDeadzonePxChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{:.2}", self.live.cursor_deadzone_px))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
@@ -355,86 +396,139 @@ impl App {
                     column![
                         row![
                             text("Smear speed"),
-                            slider(0.0..=3000.0, self.live.cursor_smear_speed_threshold, Message::CursorSmearSpeedThresholdChanged)
-                                .width(Length::Fill),
-                            text(format!("{:.0}", self.live.cursor_smear_speed_threshold)).width(Length::Fixed(56.0)),
+                            slider(
+                                0.0..=3000.0,
+                                self.live.cursor_smear_speed_threshold,
+                                Message::CursorSmearSpeedThresholdChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{:.0}", self.live.cursor_smear_speed_threshold))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Smear shutter"),
-                            slider(0.1..=10.0, self.live.cursor_smear_shutter_scale, Message::CursorSmearShutterScaleChanged)
-                                .step(0.1)
-                                .width(Length::Fill),
-                            text(format!("{:.2}", self.live.cursor_smear_shutter_scale)).width(Length::Fixed(56.0)),
+                            slider(
+                                0.1..=10.0,
+                                self.live.cursor_smear_shutter_scale,
+                                Message::CursorSmearShutterScaleChanged
+                            )
+                            .step(0.1)
+                            .width(Length::Fill),
+                            text(format!("{:.2}", self.live.cursor_smear_shutter_scale))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Smear len"),
-                            slider(0.0..=400.0, self.live.cursor_smear_min_len, Message::CursorSmearMinLenChanged)
-                                .width(Length::Fill),
-                            slider(1.0..=500.0, self.live.cursor_smear_max_len, Message::CursorSmearMaxLenChanged)
-                                .width(Length::Fill),
+                            slider(
+                                0.0..=400.0,
+                                self.live.cursor_smear_min_len,
+                                Message::CursorSmearMinLenChanged
+                            )
+                            .width(Length::Fill),
+                            slider(
+                                1.0..=500.0,
+                                self.live.cursor_smear_max_len,
+                                Message::CursorSmearMaxLenChanged
+                            )
+                            .width(Length::Fill),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Smear taps"),
-                            slider(1..=8, self.live.cursor_smear_taps, Message::CursorSmearTapsChanged)
-                                .width(Length::Fill),
-                            text(format!("{}", self.live.cursor_smear_taps)).width(Length::Fixed(36.0)),
+                            slider(
+                                1..=8,
+                                self.live.cursor_smear_taps,
+                                Message::CursorSmearTapsChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{}", self.live.cursor_smear_taps))
+                                .width(Length::Fixed(36.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Alpha exp"),
-                            slider(0.1..=4.0, self.live.cursor_smear_alpha_exp, Message::CursorSmearAlphaExpChanged)
-                                .step(0.1)
-                                .width(Length::Fill),
-                            text(format!("{:.2}", self.live.cursor_smear_alpha_exp)).width(Length::Fixed(56.0)),
+                            slider(
+                                0.1..=4.0,
+                                self.live.cursor_smear_alpha_exp,
+                                Message::CursorSmearAlphaExpChanged
+                            )
+                            .step(0.1)
+                            .width(Length::Fill),
+                            text(format!("{:.2}", self.live.cursor_smear_alpha_exp))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Alpha scale"),
-                            slider(0.01..=2.0, self.live.cursor_smear_alpha_scale, Message::CursorSmearAlphaScaleChanged)
-                                .step(0.01)
-                                .width(Length::Fill),
-                            text(format!("{:.2}", self.live.cursor_smear_alpha_scale)).width(Length::Fixed(56.0)),
+                            slider(
+                                0.01..=2.0,
+                                self.live.cursor_smear_alpha_scale,
+                                Message::CursorSmearAlphaScaleChanged
+                            )
+                            .step(0.01)
+                            .width(Length::Fill),
+                            text(format!("{:.2}", self.live.cursor_smear_alpha_scale))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Stretch thr"),
-                            slider(0.0..=3000.0, self.live.cursor_smear_stretch_threshold, Message::CursorSmearStretchThresholdChanged)
-                                .width(Length::Fill),
-                            text(format!("{:.0}", self.live.cursor_smear_stretch_threshold)).width(Length::Fixed(56.0)),
+                            slider(
+                                0.0..=3000.0,
+                                self.live.cursor_smear_stretch_threshold,
+                                Message::CursorSmearStretchThresholdChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{:.0}", self.live.cursor_smear_stretch_threshold))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Stretch range"),
-                            slider(1.0..=4000.0, self.live.cursor_smear_stretch_range, Message::CursorSmearStretchRangeChanged)
-                                .width(Length::Fill),
-                            text(format!("{:.0}", self.live.cursor_smear_stretch_range)).width(Length::Fixed(56.0)),
+                            slider(
+                                1.0..=4000.0,
+                                self.live.cursor_smear_stretch_range,
+                                Message::CursorSmearStretchRangeChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{:.0}", self.live.cursor_smear_stretch_range))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Max stretch"),
-                            slider(0.0..=5.0, self.live.cursor_smear_max_stretch, Message::CursorSmearMaxStretchChanged)
-                                .width(Length::Fill),
-                            text(format!("{:.2}", self.live.cursor_smear_max_stretch)).width(Length::Fixed(56.0)),
+                            slider(
+                                0.0..=5.0,
+                                self.live.cursor_smear_max_stretch,
+                                Message::CursorSmearMaxStretchChanged
+                            )
+                            .width(Length::Fill),
+                            text(format!("{:.2}", self.live.cursor_smear_max_stretch))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
                         row![
                             text("Max squash"),
-                            slider(0.0..=0.95, self.live.cursor_smear_max_squash, Message::CursorSmearMaxSquashChanged)
-                                .step(0.01)
-                                .width(Length::Fill),
-                            text(format!("{:.2}", self.live.cursor_smear_max_squash)).width(Length::Fixed(56.0)),
+                            slider(
+                                0.0..=0.95,
+                                self.live.cursor_smear_max_squash,
+                                Message::CursorSmearMaxSquashChanged
+                            )
+                            .step(0.01)
+                            .width(Length::Fill),
+                            text(format!("{:.2}", self.live.cursor_smear_max_squash))
+                                .width(Length::Fixed(56.0)),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
@@ -543,8 +637,7 @@ impl App {
                     text("Dump dir"),
                     container(text(Self::short_path(Some(&self.fixed.dump_dir))).size(13))
                         .width(Length::Fill),
-                    App::btn("Browse")
-                        .on_press_maybe((!disabled).then_some(Message::PickDumpDir)),
+                    App::btn("Browse").on_press_maybe((!disabled).then_some(Message::PickDumpDir)),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -559,24 +652,25 @@ impl App {
                 .align_y(Alignment::Center),
                 Self::inset_divider(),
                 Self::section_heading("Theme"),
-                pick_list(
-                    get_all_themes(),
-                    self.theme.clone(),
-                    Message::ThemeChanged
-                )
+                pick_list(get_all_themes(), self.theme.clone(), Message::ThemeChanged)
             ]
             .spacing(8);
 
             controls = controls.push(advanced);
         }
 
-        container(scrollable::Scrollable::with_direction(controls, scrollable::Direction::Vertical(Scrollbar::hidden())).auto_scroll(true))
-            .padding(12)
-            .style(iced::widget::container::rounded_box)
-            .height(Length::Fill)
-            .width(Length::FillPortion(2))
-            .max_width(560)
-            .into()
+        container(
+            scrollable::Scrollable::with_direction(
+                controls,
+                scrollable::Direction::Vertical(Scrollbar::hidden()),
+            )
+            .auto_scroll(true),
+        )
+        .padding(12)
+        .style(iced::widget::container::rounded_box)
+        .height(Length::Fill)
+        .width(Length::FillPortion(2))
+        .max_width(560)
+        .into()
     }
 }
-

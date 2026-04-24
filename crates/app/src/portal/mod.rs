@@ -1,6 +1,5 @@
-pub mod pipewire;
 pub mod notifs;
-
+pub mod pipewire;
 
 // reuse didnt work out
 async fn portal_connection() -> eyre::Result<zbus::Connection> {

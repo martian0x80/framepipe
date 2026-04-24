@@ -4,23 +4,24 @@ use std::{
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
     rc::Rc,
     sync::{
-        Mutex, OnceLock,
-        Arc,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
 };
 
+use crate::{
+    capture::types::CaptureFrame, portal::portal_connection,
+    shared::pipewire_frame_ring::PipeWireFrameRing,
+};
 use ashpd::desktop::{
-    PersistMode,
-    Session,
+    PersistMode, Session,
     screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
 };
 use khronos_egl as egl;
 use pipewire as pw;
 use pw::{properties::properties, spa};
 use spa::pod::Pod;
-use crate::{capture::types::CaptureFrame, portal::portal_connection, shared::pipewire_frame_ring::PipeWireFrameRing};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -84,7 +85,8 @@ async fn screencast_with_restore_token(
     let proxy = tokio::time::timeout(
         tokio::time::Duration::from_secs(5),
         Screencast::with_connection(portal_connection().await?),
-        ).await??;
+    )
+    .await??;
     log::debug!("portal screencast proxy created");
     let session = proxy
         .create_session(Default::default())
@@ -144,7 +146,9 @@ pub async fn screencast() -> eyre::Result<PortalPipeWireRemote> {
         match screencast_with_restore_token(cached).await {
             Ok(v) => return Ok(v),
             Err(e) => {
-                log::warn!("restore-token screencast attempt failed, falling back to fresh selection: {e}");
+                log::warn!(
+                    "restore-token screencast attempt failed, falling back to fresh selection: {e}"
+                );
                 store_cached_restore_token(None);
             }
         }
@@ -281,7 +285,6 @@ fn build_pipewire_format_offers(
         pw::spa::param::video::VideoFormat::BGR,
         pw::spa::param::video::VideoFormat::ARGB,
         pw::spa::param::video::VideoFormat::ABGR,
-        
     ];
 
     let mut offers = Vec::new();
@@ -370,11 +373,8 @@ fn build_enum_format_object(
                 },
             ))),
         );
-        modifier_prop.flags =
-            spa::pod::PropertyFlags::MANDATORY
-                | spa::pod::PropertyFlags::from_bits_retain(
-                    spa::sys::SPA_POD_PROP_FLAG_DONT_FIXATE,
-                );
+        modifier_prop.flags = spa::pod::PropertyFlags::MANDATORY
+            | spa::pod::PropertyFlags::from_bits_retain(spa::sys::SPA_POD_PROP_FLAG_DONT_FIXATE);
         properties.push(modifier_prop);
     }
 

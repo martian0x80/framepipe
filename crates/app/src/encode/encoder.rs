@@ -86,15 +86,15 @@ fn fourcc_to_drm_format(fourcc: u32) -> Option<&'static str> {
 
 fn fourcc_to_raw_format(fourcc: u32) -> Option<&'static str> {
     match fourcc {
-        0x34324241 => Some("RGBA"), // DRM_FORMAT_ABGR8888 (LE memory: RGBA)
-        0x34324258 => Some("RGBx"), // DRM_FORMAT_XBGR8888
-        0x34325241 => Some("BGRA"), // DRM_FORMAT_ARGB8888
-        0x34325258 => Some("BGRx"), // DRM_FORMAT_XRGB8888
+        0x34324241 => Some("RGBA"),    // DRM_FORMAT_ABGR8888 (LE memory: RGBA)
+        0x34324258 => Some("RGBx"),    // DRM_FORMAT_XBGR8888
+        0x34325241 => Some("BGRA"),    // DRM_FORMAT_ARGB8888
+        0x34325258 => Some("BGRx"),    // DRM_FORMAT_XRGB8888
         0x30334241 => Some("RGB10A2"), // DRM_FORMAT_ABGR2101010
         0x30334258 => Some("RGB10A2"), // DRM_FORMAT_XBGR2101010
         0x30335241 => Some("BGR10A2"), // DRM_FORMAT_ARGB2101010
         0x30335258 => Some("BGR10A2"), // DRM_FORMAT_XRGB2101010
-        0x3231564e => Some("NV12"), // DRM_FORMAT_NV12
+        0x3231564e => Some("NV12"),    // DRM_FORMAT_NV12
         _ => None,
     }
 }
@@ -341,21 +341,21 @@ fn set_appsrc_caps(
     // If exporter gives linear modifier (0), prefer plain raw caps for compatibility.
     if ex.modifier == 0 {
         if let Some(raw) = raw {
-        let raw_fallback = format!(
-            "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
-            raw,
-            ex.width,
-            ex.height,
-            fps,
-            range,
-            colorimetry.as_str(),
-            transfer_suffix.as_str()
-        );
-        if let Ok(caps) = gst::Caps::from_str(&raw_fallback) {
-            log::debug!("Using appsrc caps (linear modifier fallback): {raw_fallback}");
-            appsrc.set_caps(Some(&caps));
-            return Ok(());
-        }
+            let raw_fallback = format!(
+                "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
+                raw,
+                ex.width,
+                ex.height,
+                fps,
+                range,
+                colorimetry.as_str(),
+                transfer_suffix.as_str()
+            );
+            if let Ok(caps) = gst::Caps::from_str(&raw_fallback) {
+                log::debug!("Using appsrc caps (linear modifier fallback): {raw_fallback}");
+                appsrc.set_caps(Some(&caps));
+                return Ok(());
+            }
         }
     }
 

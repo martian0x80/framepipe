@@ -6,7 +6,7 @@ pub enum ProcessState {
     Running,
     Stopped(Option<String>),
     Preview,
-    Paused
+    Paused,
 }
 
 impl std::fmt::Display for ProcessState {
@@ -34,9 +34,9 @@ impl ProcessState {
     }
 }
 
-
 pub async fn send_notification(state: &ProcessState, timeout: u32) -> eyre::Result<()> {
-    let proxy = notification::NotificationProxy::with_connection(portal_connection().await?).await?;
+    let proxy =
+        notification::NotificationProxy::with_connection(portal_connection().await?).await?;
     let state_code = state.to_string();
     let id = format!("framepipe-notification-{}", state_code);
     let title = "Framepipe";
@@ -49,5 +49,3 @@ pub async fn send_notification(state: &ProcessState, timeout: u32) -> eyre::Resu
     proxy.remove_notification(id.as_str()).await?;
     Ok(())
 }
-
-

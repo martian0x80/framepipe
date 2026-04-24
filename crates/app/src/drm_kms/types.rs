@@ -284,7 +284,7 @@ pub struct CaptureOptions {
 /// are included here. Encoder parameters, session-init parameters (card path,
 /// output size, etc.) are intentionally excluded because they
 /// cannot take effect without restarting the session.
-// This should probably be in `common` but oh well. 
+// This should probably be in `common` but oh well.
 #[derive(Debug, Clone)]
 pub struct LiveSettings {
     pub fps: u32,

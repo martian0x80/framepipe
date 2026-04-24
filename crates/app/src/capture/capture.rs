@@ -13,11 +13,8 @@ pub fn run_capture_session(
     let mut backend_impl = build_backend(backend);
     log::info!("capture backend selected: {}", backend_impl.kind());
     backend_impl.start(&options)?;
-    let result = super::recording_loop::run_capture_session(
-        options,
-        control,
-        backend_impl.as_mut(),
-    );
+    let result =
+        super::recording_loop::run_capture_session(options, control, backend_impl.as_mut());
     let stop_result = backend_impl.stop();
     match (result, stop_result) {
         (Err(e), _) => Err(e),
