@@ -1,0 +1,89 @@
+name: CI & Release
+
+on:
+  pull_request:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            git \
+            pkg-config \
+            clang \
+            libclang-dev \
+            libpipewire-0.3-dev \
+            libdrm-dev \
+            libinput-dev \
+            libudev-dev \
+            libegl1-mesa-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
+
+      - name: Install Rust
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Verify linking
+        run: |
+          ldd target/release/framepipe || true
+          ldd target/release/framepipe-privd || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: framepipe-linux
+          path: |
+            target/release/framepipe
+            target/release/framepipe-privd
+            target/release/*gui*
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: framepipe-linux
+          path: artifacts
+
+      - name: Package
+        run: |
+          mkdir release
+          cp artifacts/* release/
+          tar -czvf framepipe-linux.tar.gz -C release .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: framepipe-linux.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
