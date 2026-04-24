@@ -24,9 +24,27 @@ jobs:
 
   check:
     runs-on: ubuntu-24.04
-    needs: fmt
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            clang \
+            libclang-dev \
+            libglib2.0-dev \
+            libpipewire-0.3-dev \
+            libdrm-dev \
+            libinput-dev \
+            libudev-dev \
+            libegl1-mesa-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -37,9 +55,27 @@ jobs:
 
   clippy:
     runs-on: ubuntu-24.04
-    needs: check
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            clang \
+            libclang-dev \
+            libglib2.0-dev \
+            libpipewire-0.3-dev \
+            libdrm-dev \
+            libinput-dev \
+            libudev-dev \
+            libegl1-mesa-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
 
       - uses: dtolnay/rust-toolchain@stable
 

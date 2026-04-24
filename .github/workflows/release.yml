@@ -28,6 +28,7 @@ jobs:
             pkg-config \
             clang \
             libclang-dev \
+            libglib2.0-dev \
             libpipewire-0.3-dev \
             libdrm-dev \
             libinput-dev \
