@@ -23,6 +23,7 @@ type EglExportImage = unsafe extern "C" fn(
     offsets: *mut i32,
 ) -> u32;
 
+#[allow(clippy::missing_safety_doc)]
 pub unsafe fn export_rgba_tex_to_dmabuf(
     egl: &khronos_egl::Instance<khronos_egl::Static>,
     display: khronos_egl::Display,

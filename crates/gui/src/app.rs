@@ -116,11 +116,15 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         framepipe::init_logging("info");
-        let mut fixed = FixedOptions::default();
-        fixed.source = SourceChoice::Portal;
+        let fixed = FixedOptions {
+            source: SourceChoice::MonitorKms,
+            ..Default::default()
+        };
 
-        let mut live = LiveSettings::default();
-        live.fps = 60;
+        let live = LiveSettings {
+            fps: 60,
+            ..Default::default()
+        };
 
         Self {
             mode: AppMode::Idle,
@@ -174,56 +178,55 @@ impl App {
     }
 
     fn build_capture_args(&self) -> CaptureArgs {
-        let mut args = CaptureArgs::default();
-        args.capture_backend = self.fixed.source.to_backend();
-        args.card =
-            (!self.fixed.card.trim().is_empty()).then(|| self.fixed.card.trim().to_string());
-        args.connector = (!self.fixed.connector.trim().is_empty())
-            .then(|| self.fixed.connector.trim().to_string());
-        args.allow_fallback_connector = self.fixed.allow_fallback_connector;
-        args.fps = self.live.fps.max(1);
-        args.output_width = Self::parse_opt_u32(&self.fixed.output_width);
-        args.output_height = Self::parse_opt_u32(&self.fixed.output_height);
-        args.dump_frames = self.fixed.dump_frames;
-        args.dump_dir = self.fixed.dump_dir.clone();
-        args.dump_every = Self::parse_or(&self.fixed.dump_every, 30_u32).max(1);
-        args.bitrate_kbps = Self::parse_or(&self.fixed.bitrate_input, 15000_u32).max(1);
-        args.frame_rate_mode = self.fixed.frame_rate_mode.to_mode();
-        args.bitrate_mode = self.fixed.bitrate_mode.to_mode();
-        args.quality = self.fixed.quality.to_quality();
-        args.color_range = self.fixed.color_range.to_color_range();
-        args.colorimetry = self.fixed.colorimetry.to_colorimetry();
-        args.encoder_backend = self.fixed.encoder.to_encoder();
-        args.video_codec = self.fixed.codec.to_codec();
-        args.cursor_composition = self.fixed.cursor_composition;
-        args.cursor_hotspot_x = Self::parse_or(&self.fixed.cursor_hotspot_x, 0_i32);
-        args.cursor_hotspot_y = Self::parse_or(&self.fixed.cursor_hotspot_y, 0_i32);
-        args.cursor_scale = self.live.cursor_scale.clamp(1.0, 100.0);
-        args.cursor_smooth = self.live.cursor_smooth;
-        args.cursor_smear = self.live.cursor_smear;
-        args.cursor_spring_k = self.live.cursor_spring_k;
-        args.cursor_spring_d = self.live.cursor_spring_d;
-        args.cursor_max_speed = self.live.cursor_max_speed;
-        args.cursor_snap_px = self.live.cursor_snap_px;
-        args.cursor_smooth_ms = self.live.cursor_smooth_ms;
-        args.cursor_deadzone_px = self.live.cursor_deadzone_px;
-        args.cursor_smear_speed_threshold = self.live.cursor_smear_speed_threshold;
-        args.cursor_smear_shutter_scale = self.live.cursor_smear_shutter_scale;
-        args.cursor_smear_min_len = self.live.cursor_smear_min_len;
-        args.cursor_smear_max_len = self.live.cursor_smear_max_len;
-        args.cursor_smear_taps = self.live.cursor_smear_taps.min(8).max(1);
-        args.cursor_smear_alpha_exp = self.live.cursor_smear_alpha_exp;
-        args.cursor_smear_alpha_scale = self.live.cursor_smear_alpha_scale;
-        args.cursor_smear_stretch_threshold = self.live.cursor_smear_stretch_threshold;
-        args.cursor_smear_stretch_range = self.live.cursor_smear_stretch_range;
-        args.cursor_smear_max_stretch = self.live.cursor_smear_max_stretch;
-        args.cursor_smear_max_squash = self.live.cursor_smear_max_squash;
-        args.wayland_sync_frequency = Self::parse_or(&self.fixed.wayland_sync_frequency, 0.5_f64);
-        args.profile = self.fixed.profile.to_profile();
-        args.cursor_sprite = self.live.cursor_sprite.clone();
-        args.background = self.live.background.clone();
-        args.background_zoom = self.live.background_zoom.clamp(1.0, 100.0);
-        args
+        CaptureArgs {
+            capture_backend: self.fixed.source.to_backend(),
+            card: (!self.fixed.card.trim().is_empty()).then(|| self.fixed.card.trim().to_string()),
+            connector: (!self.fixed.connector.trim().is_empty())
+                .then(|| self.fixed.connector.trim().to_string()),
+            allow_fallback_connector: self.fixed.allow_fallback_connector,
+            fps: self.live.fps.max(1),
+            output_width: Self::parse_opt_u32(&self.fixed.output_width),
+            output_height: Self::parse_opt_u32(&self.fixed.output_height),
+            dump_frames: self.fixed.dump_frames,
+            dump_dir: self.fixed.dump_dir.clone(),
+            dump_every: Self::parse_or(&self.fixed.dump_every, 30_u32).max(1),
+            bitrate_kbps: Self::parse_or(&self.fixed.bitrate_input, 15000_u32).max(1),
+            frame_rate_mode: self.fixed.frame_rate_mode.to_mode(),
+            bitrate_mode: self.fixed.bitrate_mode.to_mode(),
+            quality: self.fixed.quality.to_quality(),
+            color_range: self.fixed.color_range.to_color_range(),
+            colorimetry: self.fixed.colorimetry.to_colorimetry(),
+            encoder_backend: self.fixed.encoder.to_encoder(),
+            video_codec: self.fixed.codec.to_codec(),
+            cursor_composition: self.fixed.cursor_composition,
+            cursor_hotspot_x: Self::parse_or(&self.fixed.cursor_hotspot_x, 0_i32),
+            cursor_hotspot_y: Self::parse_or(&self.fixed.cursor_hotspot_y, 0_i32),
+            cursor_scale: self.live.cursor_scale.clamp(1.0, 100.0),
+            cursor_smooth: self.live.cursor_smooth,
+            cursor_smear: self.live.cursor_smear,
+            cursor_spring_k: self.live.cursor_spring_k,
+            cursor_spring_d: self.live.cursor_spring_d,
+            cursor_max_speed: self.live.cursor_max_speed,
+            cursor_snap_px: self.live.cursor_snap_px,
+            cursor_smooth_ms: self.live.cursor_smooth_ms,
+            cursor_deadzone_px: self.live.cursor_deadzone_px,
+            cursor_smear_speed_threshold: self.live.cursor_smear_speed_threshold,
+            cursor_smear_shutter_scale: self.live.cursor_smear_shutter_scale,
+            cursor_smear_min_len: self.live.cursor_smear_min_len,
+            cursor_smear_max_len: self.live.cursor_smear_max_len,
+            cursor_smear_taps: self.live.cursor_smear_taps.clamp(1, 8),
+            cursor_smear_alpha_exp: self.live.cursor_smear_alpha_exp,
+            cursor_smear_alpha_scale: self.live.cursor_smear_alpha_scale,
+            cursor_smear_stretch_threshold: self.live.cursor_smear_stretch_threshold,
+            cursor_smear_stretch_range: self.live.cursor_smear_stretch_range,
+            cursor_smear_max_stretch: self.live.cursor_smear_max_stretch,
+            cursor_smear_max_squash: self.live.cursor_smear_max_squash,
+            wayland_sync_frequency: Self::parse_or(&self.fixed.wayland_sync_frequency, 0.5_f64),
+            profile: self.fixed.profile.to_profile(),
+            cursor_sprite: self.live.cursor_sprite.clone(),
+            background: self.live.background.clone(),
+            background_zoom: self.live.background_zoom.clamp(1.0, 100.0),
+        }
     }
 
     fn apply_live(&self) {

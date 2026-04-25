@@ -1,8 +1,9 @@
 use arc_swap::ArcSwap;
 use drm::Device as BasicDevice;
 use drm::control::Device as ControlDevice;
+use std::fmt::Display;
 use std::fs::{File, OpenOptions};
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::OwnedFd;
 use std::os::unix::io::{AsFd, BorrowedFd};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,14 +28,6 @@ impl Card {
 
     pub fn from_owned_fd(fd: OwnedFd) -> Self {
         Card(File::from(fd))
-    }
-
-    pub fn try_clone(&self) -> std::io::Result<Self> {
-        self.0.try_clone().map(Card)
-    }
-
-    pub fn as_raw_fd(&self) -> RawFd {
-        self.0.as_raw_fd()
     }
 }
 
@@ -63,11 +56,11 @@ pub enum FrameRateMode {
     Vfr,
 }
 
-impl ToString for FrameRateMode {
-    fn to_string(&self) -> String {
+impl Display for FrameRateMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FrameRateMode::Cfr => "cfr".to_string(),
-            FrameRateMode::Vfr => "vfr".to_string(),
+            FrameRateMode::Cfr => write!(f, "cfr"),
+            FrameRateMode::Vfr => write!(f, "vfr"),
         }
     }
 }
@@ -88,21 +81,21 @@ pub enum BitrateMode {
     Pass3,
 }
 
-impl ToString for BitrateMode {
-    fn to_string(&self) -> String {
+impl Display for BitrateMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BitrateMode::Cbr => "cbr".to_string(),
-            BitrateMode::Vbr => "vbr".to_string(),
-            BitrateMode::Qvbr => "qvbr".to_string(),
-            BitrateMode::Vcm => "vcm".to_string(),
-            BitrateMode::Cqp => "cqp".to_string(),
-            BitrateMode::Icq => "icq".to_string(),
-            BitrateMode::Default => "default".to_string(),
-            BitrateMode::Quant => "quant".to_string(),
-            BitrateMode::Qual => "qual".to_string(),
-            BitrateMode::Pass1 => "pass1".to_string(),
-            BitrateMode::Pass2 => "pass2".to_string(),
-            BitrateMode::Pass3 => "pass3".to_string(),
+            BitrateMode::Cbr => write!(f, "cbr"),
+            BitrateMode::Vbr => write!(f, "vbr"),
+            BitrateMode::Qvbr => write!(f, "qvbr"),
+            BitrateMode::Vcm => write!(f, "vcm"),
+            BitrateMode::Cqp => write!(f, "cqp"),
+            BitrateMode::Icq => write!(f, "icq"),
+            BitrateMode::Default => write!(f, "default"),
+            BitrateMode::Quant => write!(f, "quant"),
+            BitrateMode::Qual => write!(f, "qual"),
+            BitrateMode::Pass1 => write!(f, "pass1"),
+            BitrateMode::Pass2 => write!(f, "pass2"),
+            BitrateMode::Pass3 => write!(f, "pass3"),
         }
     }
 }
@@ -113,11 +106,11 @@ pub enum ColorRange {
     Limited,
 }
 
-impl ToString for ColorRange {
-    fn to_string(&self) -> String {
+impl Display for ColorRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ColorRange::Full => "full".to_string(),
-            ColorRange::Limited => "limited".to_string(),
+            ColorRange::Full => write!(f, "full"),
+            ColorRange::Limited => write!(f, "limited"),
         }
     }
 }
@@ -129,12 +122,12 @@ pub enum Colorimetry {
     Bt2020,
 }
 
-impl ToString for Colorimetry {
-    fn to_string(&self) -> String {
+impl Display for Colorimetry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Colorimetry::Bt601 => "bt601".to_string(),
-            Colorimetry::Bt709 => "bt709".to_string(),
-            Colorimetry::Bt2020 => "bt2020".to_string(),
+            Colorimetry::Bt601 => write!(f, "bt601"),
+            Colorimetry::Bt709 => write!(f, "bt709"),
+            Colorimetry::Bt2020 => write!(f, "bt2020"),
         }
     }
 }
@@ -148,14 +141,14 @@ pub enum QualityPreset {
     Ultra,
 }
 
-impl ToString for QualityPreset {
-    fn to_string(&self) -> String {
+impl Display for QualityPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            QualityPreset::Low => "low".to_string(),
-            QualityPreset::Medium => "medium".to_string(),
-            QualityPreset::High => "high".to_string(),
-            QualityPreset::VeryHigh => "veryhigh".to_string(),
-            QualityPreset::Ultra => "ultra".to_string(),
+            QualityPreset::Low => write!(f, "low"),
+            QualityPreset::Medium => write!(f, "medium"),
+            QualityPreset::High => write!(f, "high"),
+            QualityPreset::VeryHigh => write!(f, "veryhigh"),
+            QualityPreset::Ultra => write!(f, "ultra"),
         }
     }
 }
@@ -168,13 +161,13 @@ pub enum EncoderBackend {
     Cpu,
 }
 
-impl ToString for EncoderBackend {
-    fn to_string(&self) -> String {
+impl Display for EncoderBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EncoderBackend::Vaapi => "vaapi".to_string(),
-            EncoderBackend::Qsv => "qsv".to_string(),
-            EncoderBackend::Vulkan => "vulkan".to_string(),
-            EncoderBackend::Cpu => "cpu".to_string(),
+            EncoderBackend::Vaapi => write!(f, "vaapi"),
+            EncoderBackend::Qsv => write!(f, "qsv"),
+            EncoderBackend::Vulkan => write!(f, "vulkan"),
+            EncoderBackend::Cpu => write!(f, "cpu"),
         }
     }
 }
@@ -186,12 +179,12 @@ pub enum VideoCodec {
     Av1,
 }
 
-impl ToString for VideoCodec {
-    fn to_string(&self) -> String {
+impl Display for VideoCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VideoCodec::H264 => "h264".to_string(),
-            VideoCodec::H265 => "h265".to_string(),
-            VideoCodec::Av1 => "av1".to_string(),
+            VideoCodec::H264 => write!(f, "h264"),
+            VideoCodec::H265 => write!(f, "h265"),
+            VideoCodec::Av1 => write!(f, "av1"),
         }
     }
 }
@@ -203,12 +196,12 @@ pub enum Profile {
     Sdr,   // default bit depth (main) + bt709 + NV12 format
 }
 
-impl ToString for Profile {
-    fn to_string(&self) -> String {
+impl Display for Profile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Profile::Hdr10 => "hdr10".to_string(),
-            Profile::Hdr => "hdr".to_string(),
-            Profile::Sdr => "sdr".to_string(),
+            Profile::Hdr10 => write!(f, "hdr10"),
+            Profile::Hdr => write!(f, "hdr"),
+            Profile::Sdr => write!(f, "sdr"),
         }
     }
 }

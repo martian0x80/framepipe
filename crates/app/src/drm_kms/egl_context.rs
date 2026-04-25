@@ -48,7 +48,9 @@ pub struct EglCtx {
     pub egl: khronos_egl::Instance<khronos_egl::Static>,
     pub display: khronos_egl::Display,
     pub context: khronos_egl::Context,
+    #[expect(unused)]
     pub surface: khronos_egl::Surface,
+    #[expect(unused)]
     pub backend: EglBackend,
 
     // keep alive for GBM path
@@ -322,15 +324,6 @@ pub fn init_egl(_card_path: &str) -> Result<EglCtx, EglError> {
     Err(EglError::Unknown)
 }
 
-fn close_fds(plane_fds: &[Option<std::os::fd::OwnedFd>]) {
-    for fd in plane_fds {
-        if let Some(fd) = fd {
-            let _ = fd.as_raw_fd();
-            // die now
-        }
-    }
-}
-
 fn egl_image_to_texture_target(
     egl: &khronos_egl::Instance<khronos_egl::Static>,
     image: khronos_egl::Image,
@@ -429,6 +422,8 @@ pub(crate) fn delete_gl_texture(
     Ok(())
 }
 
+// this is now abstracted in the capture backend trait
+#[expect(dead_code)]
 pub(crate) fn import_current_capture_texture(
     probe_session: &mut ProbeSession,
     privd_session: &mut PrivdSession,

@@ -315,11 +315,11 @@ fn render_encoder_props(factory_name: &str, props: Vec<(&'static str, String)>) 
 
 fn is_codec_supported(backend: &EncoderBackend, codec: &VideoCodec) -> bool {
     match (backend, codec) {
-        (EncoderBackend::Vaapi, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
-        (EncoderBackend::Qsv, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
+        (
+            EncoderBackend::Vaapi | EncoderBackend::Qsv | EncoderBackend::Cpu,
+            VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1,
+        ) => true,
         (EncoderBackend::Vulkan, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => false, // never tested
-        (EncoderBackend::Cpu, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1) => true,
-        _ => false,
     }
 }
 

@@ -117,7 +117,7 @@ pub fn push_exported_dmabuf(
             ex.width as u32,
             ex.height as u32,
             &ex.offsets.iter().map(|v| *v as usize).collect::<Vec<_>>(),
-            &ex.strides.iter().copied().collect::<Vec<_>>(),
+            &ex.strides.to_vec(),
         )
         .map_err(|e| ExportError::VideoMeta(format!("Failed to add VideoMeta: {e}")))?;
 

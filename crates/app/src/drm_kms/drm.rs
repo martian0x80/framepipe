@@ -1,7 +1,7 @@
 use crate::drm_kms::types::Card;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum DrmInitError {
+pub enum DrmInitError {
     #[error("Failed to open DRM device: {0}")]
     OpenDevice(#[source] std::io::Error),
 }

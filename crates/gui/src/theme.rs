@@ -32,7 +32,7 @@ impl From<ThemeKind> for Theme {
 }
 
 pub fn get_all_themes() -> Vec<Theme> {
-    let existing_themes = Theme::ALL.iter().cloned().collect::<Vec<_>>();
+    let existing_themes = Theme::ALL.to_vec();
     let custom_themes = ThemeKind::ALL
         .iter()
         .cloned()

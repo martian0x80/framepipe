@@ -53,6 +53,7 @@ const DRM_FORMAT_MOD_INVALID: i64 = 0x00ff_ffff_ffff_ffff;
 #[derive(Clone)]
 pub struct FormatOffer {
     format: pw::spa::param::video::VideoFormat,
+    #[expect(unused)]
     fourcc: u32,
     modifiers: Vec<i64>,
 }
@@ -177,10 +178,6 @@ pub async fn screencast_session(
         log::info!("portal screencast session closed");
     }
     run_result
-}
-
-fn fourcc(a: u8, b: u8, c: u8, d: u8) -> u32 {
-    (a as u32) | ((b as u32) << 8) | ((c as u32) << 16) | ((d as u32) << 24)
 }
 
 fn drm_fourcc_for_spa_format(fmt: pw::spa::param::video::VideoFormat) -> Option<u32> {

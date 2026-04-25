@@ -13,6 +13,7 @@ pub struct RingBuffer {
     buffer: Box<[std::cell::UnsafeCell<Option<MouseEvent>>]>,
     capacity: u64,
     write_idx: AtomicU64,
+    #[expect(unused)]
     read_idx: AtomicU64,
 }
 

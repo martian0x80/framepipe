@@ -652,17 +652,11 @@ pub fn run_capture_session(
         }
 
         if matches!(options.output, CaptureOutput::EmbeddedPreview) {
-            if preview_mailbox.is_some() {
+            if let Some(ref preview_mail) = preview_mailbox {
                 pipelines[slot]
-                    .copy_to_mailbox(preview_mailbox.as_ref().unwrap())
+                    .copy_to_mailbox(preview_mail)
                     .map_err(|e| EglError::Pipeline(e.to_string()))?;
             }
-            // for debug
-            preview_mailbox
-                .as_ref()
-                .unwrap()
-                .get_frame()
-                .map(|f| log::trace!("Updated preview mailbox with frame t_ns={}", f.t_ns));
             let _ = delete_gl_texture(&egl, frame_texture);
             frame_idx += 1;
             next_deadline += frame_period;

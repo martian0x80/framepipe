@@ -157,7 +157,7 @@ pub struct GpuPipeline {
 }
 
 impl GpuPipeline {
-    pub unsafe fn new(
+    pub(crate) unsafe fn new(
         egl: &khronos_egl::Instance<khronos_egl::Static>,
         out_w: i32,
         out_h: i32,
@@ -337,6 +337,7 @@ impl GpuPipeline {
 
             let out_tex = gl.create_texture().map_err(|e| e.to_string())?;
             gl.bind_texture(glow::TEXTURE_2D, Some(out_tex));
+            #[allow(clippy::match_single_binding)]
             let (internal_format, upload_format, upload_type) = match profile {
                 // Profile::Hdr10 => (glow::RGBA16F, glow::RGBA, glow::HALF_FLOAT),
                 // Profile::Hdr => (
@@ -426,6 +427,7 @@ impl GpuPipeline {
     ///   the (zoomed) source frame.  Pass `None` for no background.
     /// * `frame_zoom` => scale factor for the source frame [0.1, 1.0].  The
     ///   frame is centered in the output.  Pass `1.0` for no zoom.
+    #[allow(clippy::missing_safety_doc)]
     pub unsafe fn render_with_cursor(
         &self,
         src_tex: glow::NativeTexture,

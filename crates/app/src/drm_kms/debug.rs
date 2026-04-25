@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::Write;
 
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum DebugEglError {
     #[error("EGL error: {0}")]
@@ -165,7 +166,10 @@ pub(crate) fn debug_dump_texture_ppm(
         gl.uniform_1_i32(u.as_ref(), 0);
 
         gl.active_texture(glow::TEXTURE0);
-        gl.bind_texture(glow::TEXTURE_2D, Some(std::mem::transmute(src_tex)));
+        gl.bind_texture(
+            glow::TEXTURE_2D,
+            Some(std::mem::transmute::<u32, glow::NativeTexture>(src_tex)),
+        );
         gl.bind_vertex_array(Some(vao));
         gl.draw_arrays(glow::TRIANGLES, 0, 6);
         gl.finish();

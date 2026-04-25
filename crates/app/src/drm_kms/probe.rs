@@ -57,7 +57,7 @@ impl PartialEq for ConnectorHeapItem {
 
 impl PartialOrd for ConnectorHeapItem {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.0.modes().len().cmp(&other.0.modes().len()))
+        Some(self.cmp(other))
     }
 }
 

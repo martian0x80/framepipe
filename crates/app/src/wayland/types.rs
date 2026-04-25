@@ -56,7 +56,7 @@ pub struct MouseTrackChunk {
 }
 
 #[derive(Default)]
-pub(crate) struct MouseState {
+pub struct MouseState {
     pub anchored: bool,
     pub x: f64,
     pub y: f64,
