@@ -3,6 +3,7 @@ target
 # reading materials
 **/*.md
 !README.md
+!CHANGELOG.md
 *.pdf
 openstudio-frames
 *.mp4

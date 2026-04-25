@@ -67,10 +67,16 @@ jobs:
           mkdir -p release/${archive_dir}
           cp artifacts/* release/${archive_dir}/
           tar -czvf "${archive_name}" -C release "${archive_dir}"
+      
+      - name: Extract latest changelog
+        run: |
+          awk '/^## /{i++} i==1' CHANGELOG.md > RELEASE_BODY.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           files: framepipe-x86_64-unknown-linux-gnu.tar.gz
+          draft: true
+          body_path: RELEASE_BODY.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

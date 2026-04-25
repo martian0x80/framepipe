@@ -1,0 +1,8 @@
+## [0.1.0] - 2026-04-25
+### Added
+- Initial release of Framepipe, a zero-copy gpu accelerated screenrecorder for linux (wayland).
+- Added support for xdg-desktop-portal Screencast API/Pipewire capture.
+- Added support for DRM-KMS capture.
+- Added support for background composition capture.
+- Added support for cursor composition capture.
+- Added support for ICed based GUI.
