@@ -339,23 +339,23 @@ fn set_appsrc_caps(
 
     // Some drivers expose DMA_DRM AB24 only for specific non-linear modifiers.
     // If exporter gives linear modifier (0), prefer plain raw caps for compatibility.
-    if ex.modifier == 0 {
-        if let Some(raw) = raw {
-            let raw_fallback = format!(
-                "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
-                raw,
-                ex.width,
-                ex.height,
-                fps,
-                range,
-                colorimetry.as_str(),
-                transfer_suffix.as_str()
-            );
-            if let Ok(caps) = gst::Caps::from_str(&raw_fallback) {
-                log::debug!("Using appsrc caps (linear modifier fallback): {raw_fallback}");
-                appsrc.set_caps(Some(&caps));
-                return Ok(());
-            }
+    if ex.modifier == 0
+        && let Some(raw) = raw
+    {
+        let raw_fallback = format!(
+            "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
+            raw,
+            ex.width,
+            ex.height,
+            fps,
+            range,
+            colorimetry.as_str(),
+            transfer_suffix.as_str()
+        );
+        if let Ok(caps) = gst::Caps::from_str(&raw_fallback) {
+            log::debug!("Using appsrc caps (linear modifier fallback): {raw_fallback}");
+            appsrc.set_caps(Some(&caps));
+            return Ok(());
         }
     }
 

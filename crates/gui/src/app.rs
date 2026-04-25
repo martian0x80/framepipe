@@ -1,4 +1,3 @@
-use std::ops::Div;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -8,7 +7,7 @@ mod ui;
 use framepipe::app::cli::CaptureArgs;
 use framepipe::drm_kms::types::LiveSettings;
 use framepipe::embedded_preview::EmbeddedPreviewSession;
-use iced::{Application, Subscription, Task, Theme};
+use iced::{Subscription, Task, Theme};
 
 use crate::model::{
     AppMode, BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,

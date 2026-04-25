@@ -666,8 +666,8 @@ fn run_pipewire_stream(
 
             stream.queue_raw_buffer(raw);
 
-            if let (Some(ring), Some(fmt)) = (frame_ring.as_ref(), frame_fmt.get()) {
-                if !plane_fds.is_empty() {
+            if let (Some(ring), Some(fmt)) = (frame_ring.as_ref(), frame_fmt.get())
+                && !plane_fds.is_empty() {
                     let id = frame_id.get();
                     frame_id.set(id.saturating_add(1));
                     ring.push_overwrite(CaptureFrame {
@@ -681,7 +681,6 @@ fn run_pipewire_stream(
                         strides,
                     });
                 }
-            }
 
             if next >= max_frames {
                 mainloop_for_cb.quit();
@@ -717,7 +716,7 @@ fn run_pipewire_stream(
     mainloop.run();
     let _ = stream.set_active(false);
     let _ = stream.disconnect();
-    let _ = drop(stream);
+    drop(stream);
 
     if should_stop.load(Ordering::Acquire) {
         return Err(eyre::eyre!(

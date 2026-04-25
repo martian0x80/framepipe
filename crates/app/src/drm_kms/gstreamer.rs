@@ -27,10 +27,7 @@ fn dmabuf_size(fd: std::os::fd::RawFd) -> std::io::Result<usize> {
     }
     let st = unsafe { st.assume_init() };
     if st.st_size <= 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "invalid dmabuf size",
-        ));
+        return Err(std::io::Error::other("invalid dmabuf size"));
     }
     Ok(st.st_size as usize)
 }
@@ -120,7 +117,7 @@ pub fn push_exported_dmabuf(
             ex.width as u32,
             ex.height as u32,
             &ex.offsets.iter().map(|v| *v as usize).collect::<Vec<_>>(),
-            &ex.strides.iter().map(|v| *v as i32).collect::<Vec<_>>(),
+            &ex.strides.iter().copied().collect::<Vec<_>>(),
         )
         .map_err(|e| ExportError::VideoMeta(format!("Failed to add VideoMeta: {e}")))?;
 

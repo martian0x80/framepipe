@@ -1,10 +1,8 @@
-use drm::CLOEXEC;
 use drm::ClientCapability::{Atomic, UniversalPlanes};
 use drm::Device as BasicDevice;
 use drm::control::{Device as ControlDevice, PlaneType, connector, plane};
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
-use std::os::fd::OwnedFd;
 use std::thread;
 use std::time::Duration;
 
@@ -257,7 +255,7 @@ impl ProbeSession {
         Self::new_with_card(card, requested_connector, allow_fallback_connector)
     }
 
-    pub fn new_with_card(
+    pub(crate) fn new_with_card(
         card: Card,
         requested_connector: Option<String>,
         allow_fallback_connector: bool,
@@ -369,13 +367,12 @@ impl ProbeSession {
                 continue;
             }
 
-            if let Some(last_handle) = self.last_good_plane {
-                if let Some(last_plane) = infos
+            if let Some(last_handle) = self.last_good_plane
+                && let Some(last_plane) = infos
                     .iter()
                     .find(|p| p.handle() == last_handle && p.framebuffer().is_some())
-                {
-                    return self.build_probe_result(&infos, last_plane);
-                }
+            {
+                return self.build_probe_result(&infos, last_plane);
             }
 
             let mut changed_infos = Vec::new();
@@ -428,109 +425,7 @@ impl ProbeSession {
 }
 
 pub fn list_connectors(card_path: &str) -> Result<Vec<String>, ProbeError> {
-    let card = init_drm_device(card_path).map_err(|e| ProbeError::OpenDevice(e))?;
+    let card = init_drm_device(card_path).map_err(ProbeError::OpenDevice)?;
     let connectors = get_connected_connectors(&card)?;
     Ok(connectors.into_iter().map(|c| c.to_string()).collect())
-}
-
-fn _legacy_probe(card_path: &str) -> Result<types::ProbeResult, ProbeError> {
-    let card = init_drm_device(card_path).map_err(|e| ProbeError::OpenDevice(e))?;
-    card.set_client_capability(Atomic, true)
-        .map_err(|_| ProbeError::SetClientCapability)?;
-    card.set_client_capability(UniversalPlanes, true)
-        .map_err(|_| ProbeError::SetClientCapability)?;
-    // card.set_client_capability(CursorPlaneHotspot, true)?;
-
-    let res = card
-        .resource_handles()
-        .map_err(|_| ProbeError::GetResourceHandles)?;
-
-    log::debug!("Driver: {:?}", res);
-    let connected_connectors = get_connected_connectors(&card)?;
-
-    for connector in connected_connectors {
-        let planes = get_matching_plane_from_connector(&card, &connector)?;
-        for plane in &planes {
-            log::debug!("Matching plane for connector {} -> {:?}", connector, plane);
-            log::info!(
-                "Found matching plane for connector {} -> {}",
-                connector,
-                plane
-            );
-        }
-        {
-            // Just for debugging - print out all the properties of the first matching plane for this connector
-            let best_plane = planes
-                .first()
-                .ok_or(ProbeError::NoMatchingPlanesForConnector)?;
-            let best_plane_id = best_plane.handle();
-            let properties = card
-                .get_properties(best_plane_id)
-                .map_err(|_| ProbeError::GetPlaneProperties)?;
-            log::debug!("Plane properties ->");
-            for (id, value) in properties.iter() {
-                let prop = card.get_property(*id).map_err(|_| ProbeError::Unknown)?;
-                let name = prop.name().to_str().unwrap_or("Invalid UTF-8");
-                match name {
-                    "type" => {
-                        log::debug!(
-                            "\t{} = {:?}",
-                            name,
-                            if *value == PlaneType::Primary as u64 {
-                                "Primary"
-                            } else if *value == PlaneType::Cursor as u64 {
-                                "Cursor"
-                            } else if *value == PlaneType::Overlay as u64 {
-                                "Overlay"
-                            } else {
-                                "Unknown"
-                            }
-                        );
-                    }
-                    _ => {
-                        log::debug!("\t{} = {:?}", name, value);
-                    }
-                }
-            }
-        }
-        let capture_plane = get_best_capture_plane(&card, &planes)?;
-        let fb = capture_plane.framebuffer().ok_or(ProbeError::Unknown)?;
-        log::debug!("{} has {:?}", capture_plane, fb);
-        let fb_info = card
-            .get_planar_framebuffer(fb)
-            .map_err(|_| ProbeError::GetFramebufferInfo)?;
-        log::debug!("{} has {:?}", capture_plane, fb_info);
-        let mut plane_fds: Vec<Option<OwnedFd>> = Vec::with_capacity(fb_info.buffers().len());
-        // ref: https://docs.kernel.org/gpu/drm-mm.html#c.drm_gem_prime_handle_to_fd
-        // it seems like DRM_CLOEXEC is necessary
-        for (i, buf) in fb_info.buffers().iter().enumerate() {
-            match buf {
-                Some(handle) => {
-                    let fd = card
-                        .buffer_to_prime_fd(*handle, CLOEXEC)
-                        .map_err(|_| ProbeError::BufferToPrimeFd)?;
-                    log::debug!(
-                        "plane {}: handle={:?} offset={} pitch={} -> prime_fd",
-                        i,
-                        handle,
-                        fb_info.offsets()[i],
-                        fb_info.pitches()[i]
-                    );
-                    plane_fds.push(Some(fd));
-                }
-                None => {
-                    log::debug!("plane {}: no buffer handle available", i);
-                    plane_fds.push(None);
-                }
-            }
-        }
-        let fb_id: u32 = fb.into();
-        return Ok(types::ProbeResult {
-            fb_id,
-            fb_info,
-            plane_fds: plane_fds,
-        });
-    }
-
-    Err(ProbeError::NoConnectedConnectors)
 }

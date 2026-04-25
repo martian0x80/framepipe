@@ -103,7 +103,7 @@ impl CaptureBackend for PipeWirePortalBackend {
                     return Ok(None);
                 }
                 first_wait_logs = first_wait_logs.saturating_add(1);
-                if first_wait_logs % 100 == 0 {
+                if first_wait_logs.is_multiple_of(100) {
                     log::debug!(
                         "pipewire backend waiting for first frame (stream may be paused until window damage)"
                     );

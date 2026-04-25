@@ -77,6 +77,12 @@ pub struct PreviewMailbox {
     pub frame: Arc<ArcSwapOption<PreviewFrame>>,
 }
 
+impl Default for PreviewMailbox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PreviewMailbox {
     pub fn new() -> Self {
         Self {

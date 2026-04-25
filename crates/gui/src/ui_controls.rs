@@ -561,7 +561,7 @@ impl App {
         );
 
         if self.show_advanced {
-            let mut advanced = column![
+            let advanced = column![
                 Self::section_heading("Capture Advanced"),
                 row![
                     text("Card"),

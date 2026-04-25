@@ -288,12 +288,11 @@ impl MouseTrackerLibinput {
                                         anchored: st.anchored,
                                     };
                                     pending.push(record);
-                                    if pending.len() >= 512 {
-                                        if let Err(e) = Self::flush_chunk(&mut writer, &mut pending)
+                                    if pending.len() >= 512
+                                        && let Err(e) = Self::flush_chunk(&mut writer, &mut pending)
                                         {
                                             warn!("mouse tracker chunk flush failed: {e}");
                                         }
-                                    }
                                     if let Some(ref ring) = ring {
                                         ring.push(MouseEvent {
                                             t_ns,

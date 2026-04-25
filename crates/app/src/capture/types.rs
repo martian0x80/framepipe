@@ -1,17 +1,12 @@
 use clap::ValueEnum;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum CaptureBackendKind {
     #[value(name = "kms")]
+    #[default]
     DrmKms,
     #[value(name = "portal")]
     PipewirePortal,
-}
-
-impl Default for CaptureBackendKind {
-    fn default() -> Self {
-        Self::DrmKms
-    }
 }
 
 impl std::fmt::Display for CaptureBackendKind {

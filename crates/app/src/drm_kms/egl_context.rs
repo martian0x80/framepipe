@@ -134,15 +134,13 @@ fn push_plane(
         p.3 as usize,
     ]);
 
-    if with_mods {
-        if let Some(m) = modifier {
-            attrs.extend_from_slice(&[
-                lo_k as usize,
-                (m as u32) as usize,
-                hi_k as usize,
-                ((m >> 32) as u32) as usize,
-            ]);
-        }
+    if with_mods && let Some(m) = modifier {
+        attrs.extend_from_slice(&[
+            lo_k as usize,
+            (m as u32) as usize,
+            hi_k as usize,
+            ((m >> 32) as u32) as usize,
+        ]);
     }
 }
 
@@ -167,7 +165,7 @@ fn build_attrs(
         push_plane(&mut attrs, i, *p, modifier, with_mods);
     }
 
-    attrs.push(khronos_egl::ATTRIB_NONE as usize);
+    attrs.push(khronos_egl::ATTRIB_NONE);
     attrs
 }
 
@@ -175,7 +173,7 @@ fn client_exts(egl: &khronos_egl::Instance<khronos_egl::Static>) -> String {
     egl.query_string(None, khronos_egl::EXTENSIONS)
         .ok()
         .and_then(|s| s.to_str().ok().map(|x| x.to_owned()))
-        .unwrap_or_else(|| "".to_string())
+        .unwrap_or_default()
 }
 
 fn has_ext(exts: &str, name: &str) -> bool {
@@ -237,15 +235,15 @@ fn init_display_common(
 
     egl_i
         .bind_api(khronos_egl::OPENGL_ES_API)
-        .map_err(|e| EglError::EglInit(e))?;
+        .map_err(EglError::EglInit)?;
     let ctx_attribs = [khronos_egl::CONTEXT_CLIENT_VERSION, 3, khronos_egl::NONE];
     let context = egl_i
         .create_context(display, config, None, &ctx_attribs)
-        .map_err(|e| EglError::CreateContext(e))?;
+        .map_err(EglError::CreateContext)?;
 
     egl_i
         .make_current(display, Some(surface), Some(surface), Some(context))
-        .map_err(|e| EglError::MakeCurrent(e))?;
+        .map_err(EglError::MakeCurrent)?;
 
     Ok((context, surface))
 }
@@ -268,7 +266,7 @@ fn try_init_surfaceless(
             &[khronos_egl::ATTRIB_NONE],
         )
     }
-    .map_err(|e| EglError::EglInit(e))?;
+    .map_err(EglError::EglInit)?;
 
     let (ctx, surf) = init_display_common(egl_i, display)?;
     Ok((display, ctx, surf))

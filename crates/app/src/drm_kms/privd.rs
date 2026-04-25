@@ -110,10 +110,10 @@ impl PrivdSession {
                         fds: keep,
                     },
                 );
-                if self.fb_cache.len() > 8 {
-                    if let Some(victim) = self.fb_cache.keys().copied().find(|id| *id != fb_id) {
-                        self.fb_cache.remove(&victim);
-                    }
+                if self.fb_cache.len() > 8
+                    && let Some(victim) = self.fb_cache.keys().copied().find(|id| *id != fb_id)
+                {
+                    self.fb_cache.remove(&victim);
                 }
                 log::trace!(
                     "received exported framebuffer from privd: fb={} planes={}",

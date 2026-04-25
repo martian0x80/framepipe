@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use eyre::Result;
 
 use crate::drm_kms::{

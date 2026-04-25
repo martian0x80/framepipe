@@ -314,7 +314,7 @@ pub fn run_capture_session(
         Some(ex)
     };
 
-    let frame_period = Duration::from_nanos(1_000_000_000u64 / fps as u64);
+    let _frame_period = Duration::from_nanos(1_000_000_000u64 / fps as u64);
     let dump_frames = options.dump_frames;
     let dump_every = options.dump_every.max(1);
     if dump_frames {
@@ -543,41 +543,40 @@ pub fn run_capture_session(
                 let mut motion_stretch = 1.0f32;
                 let mut motion_squash = 1.0f32;
 
-                if live.cursor_smear {
-                    if let Some((prev_x, prev_y, prev_t)) = last_cursor_sample {
-                        let vdt = (now - prev_t).as_secs_f32().max(1e-4);
-                        let vx = (s_cursor_x - prev_x) / vdt;
-                        let vy = (s_cursor_y - prev_y) / vdt;
-                        let speed = (vx * vx + vy * vy).sqrt();
-                        if speed > live.cursor_smear_speed_threshold.max(0.0) {
-                            let shutter_seconds = (1.0 / live.fps.max(1) as f32)
-                                * live.cursor_smear_shutter_scale.max(0.0);
-                            let min_len = live.cursor_smear_min_len.max(0.0);
-                            let max_len = live.cursor_smear_max_len.max(min_len);
-                            let blur_len = (speed * shutter_seconds).clamp(min_len, max_len);
-                            motion_dir_x = vx / speed;
-                            motion_dir_y = vy / speed;
-                            let extra_taps = live.cursor_smear_taps.clamp(1, 8) as usize;
-                            let alpha_exp = live.cursor_smear_alpha_exp.max(0.05);
-                            let alpha_scale = live.cursor_smear_alpha_scale.clamp(0.0, 1.0);
-                            for i in 1..=extra_taps {
-                                let t = i as f32 / extra_taps as f32;
-                                let alpha =
-                                    ((1.0 - t).powf(alpha_exp) * alpha_scale).clamp(0.0, 1.0);
-                                taps.push([
-                                    s_cursor_x - motion_dir_x * blur_len * t,
-                                    s_cursor_y - motion_dir_y * blur_len * t,
-                                    alpha,
-                                ]);
-                            }
-
-                            // Stretch cursor shape along motion axis.
-                            let stretch_threshold = live.cursor_smear_stretch_threshold.max(0.0);
-                            let stretch_range = live.cursor_smear_stretch_range.max(1.0);
-                            let s = ((speed - stretch_threshold) / stretch_range).clamp(0.0, 1.0);
-                            motion_stretch = 1.0 + live.cursor_smear_max_stretch.max(0.0) * s;
-                            motion_squash = 1.0 - live.cursor_smear_max_squash.clamp(0.0, 0.95) * s;
+                if live.cursor_smear
+                    && let Some((prev_x, prev_y, prev_t)) = last_cursor_sample
+                {
+                    let vdt = (now - prev_t).as_secs_f32().max(1e-4);
+                    let vx = (s_cursor_x - prev_x) / vdt;
+                    let vy = (s_cursor_y - prev_y) / vdt;
+                    let speed = (vx * vx + vy * vy).sqrt();
+                    if speed > live.cursor_smear_speed_threshold.max(0.0) {
+                        let shutter_seconds = (1.0 / live.fps.max(1) as f32)
+                            * live.cursor_smear_shutter_scale.max(0.0);
+                        let min_len = live.cursor_smear_min_len.max(0.0);
+                        let max_len = live.cursor_smear_max_len.max(min_len);
+                        let blur_len = (speed * shutter_seconds).clamp(min_len, max_len);
+                        motion_dir_x = vx / speed;
+                        motion_dir_y = vy / speed;
+                        let extra_taps = live.cursor_smear_taps.clamp(1, 8) as usize;
+                        let alpha_exp = live.cursor_smear_alpha_exp.max(0.05);
+                        let alpha_scale = live.cursor_smear_alpha_scale.clamp(0.0, 1.0);
+                        for i in 1..=extra_taps {
+                            let t = i as f32 / extra_taps as f32;
+                            let alpha = ((1.0 - t).powf(alpha_exp) * alpha_scale).clamp(0.0, 1.0);
+                            taps.push([
+                                s_cursor_x - motion_dir_x * blur_len * t,
+                                s_cursor_y - motion_dir_y * blur_len * t,
+                                alpha,
+                            ]);
                         }
+
+                        // Stretch cursor shape along motion axis.
+                        let stretch_threshold = live.cursor_smear_stretch_threshold.max(0.0);
+                        let stretch_range = live.cursor_smear_stretch_range.max(1.0);
+                        let s = ((speed - stretch_threshold) / stretch_range).clamp(0.0, 1.0);
+                        motion_stretch = 1.0 + live.cursor_smear_max_stretch.max(0.0) * s;
+                        motion_squash = 1.0 - live.cursor_smear_max_squash.clamp(0.0, 0.95) * s;
                     }
                 }
                 last_cursor_sample = Some((s_cursor_x, s_cursor_y, now));
@@ -698,7 +697,7 @@ pub fn run_capture_session(
         let _ = delete_gl_texture(&egl, frame_texture);
         frame_idx += 1;
 
-        if dump_frames && frame_idx % dump_every as u64 == 0 {
+        if dump_frames && frame_idx.is_multiple_of(dump_every as u64) {
             let path = options
                 .dump_dir
                 .join(format!("debug_frame_{:06}.ppm", frame_idx));

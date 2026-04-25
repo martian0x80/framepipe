@@ -66,7 +66,7 @@ impl RingBuffer {
     }
 
     pub fn clear(&self) {
-        let write = self.write_idx.load(Ordering::Acquire);
+        let _write = self.write_idx.load(Ordering::Acquire);
         for i in 0..self.capacity {
             let slot = i & (self.capacity - 1);
             unsafe {

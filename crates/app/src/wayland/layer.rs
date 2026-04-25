@@ -15,7 +15,7 @@ use crate::wayland::{
     mouse_tracker::MouseTrackerLibinput,
     types::{MouseTrackRecordingInfo, MouseTracker},
 };
-use log::{debug, info, warn};
+use log::{info, warn};
 use smithay_client_toolkit::{
     compositor::{self, CompositorHandler},
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
@@ -136,14 +136,14 @@ pub fn init_wayland(
     layer.set_size(0, 0);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     layer.commit();
-    let pool = SlotPool::new(4 * 1 * 1, &shm).unwrap();
+    let pool = SlotPool::new(4, &shm).unwrap();
     let mut state = WaylandState {
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
         compositor_state: compositor,
         layer_surface: layer,
-        shm: shm,
+        shm,
         pool,
         width: 0,
         height: 0,
@@ -171,17 +171,18 @@ pub fn init_wayland(
             .mouse_tracker
             .set_paused(control.paused.load(Ordering::Relaxed));
 
-        if let (Some(period), Some(last_anchor_at)) = (state.resync_period, state.last_anchor_at) {
-            if !state.waiting_for_anchor && last_anchor_at.elapsed() >= period {
-                state.waiting_for_anchor = true;
-                state.resync_probe_mode = true;
-                state.resync_deadline = Some(Instant::now() + Duration::from_millis(50));
-                state.set_input_region_probe(&qh);
-                log::trace!(
-                    "Periodic resync requested after {:?}; using probe input region",
-                    period
-                );
-            }
+        if let (Some(period), Some(last_anchor_at)) = (state.resync_period, state.last_anchor_at)
+            && !state.waiting_for_anchor
+            && last_anchor_at.elapsed() >= period
+        {
+            state.waiting_for_anchor = true;
+            state.resync_probe_mode = true;
+            state.resync_deadline = Some(Instant::now() + Duration::from_millis(50));
+            state.set_input_region_probe(&qh);
+            log::trace!(
+                "Periodic resync requested after {:?}; using probe input region",
+                period
+            );
         }
 
         if state.waiting_for_anchor
@@ -242,46 +243,46 @@ pub fn init_wayland(
 impl CompositorHandler for WaylandState {
     fn scale_factor_changed(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
-        new_factor: i32,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
+        _new_factor: i32,
     ) {
     }
 
     fn transform_changed(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
-        new_transform: smithay_client_toolkit::reexports::client::protocol::wl_output::Transform,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
+        _new_transform: smithay_client_toolkit::reexports::client::protocol::wl_output::Transform,
     ) {
     }
 
     fn frame(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
-        time: u32,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
+        _time: u32,
     ) {
     }
 
     fn surface_enter(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
-        output: &smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
+        _output: &smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput,
     ) {
     }
 
     fn surface_leave(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
-        output: &smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
+        _output: &smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput,
     ) {
     }
 }
@@ -325,18 +326,18 @@ impl ShmHandler for WaylandState {
 impl LayerShellHandler for WaylandState {
     fn closed(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        layer: &smithay_client_toolkit::shell::wlr_layer::LayerSurface,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _layer: &smithay_client_toolkit::shell::wlr_layer::LayerSurface,
     ) {
         self.stop_capture = true;
     }
 
     fn configure(
         &mut self,
-        conn: &Connection,
+        _conn: &Connection,
         qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        layer: &smithay_client_toolkit::shell::wlr_layer::LayerSurface,
+        _layer: &smithay_client_toolkit::shell::wlr_layer::LayerSurface,
         configure: smithay_client_toolkit::shell::wlr_layer::LayerSurfaceConfigure,
         serial: u32,
     ) {
@@ -365,25 +366,25 @@ impl OutputHandler for WaylandState {
 
     fn new_output(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        output: smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _output: smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput,
     ) {
     }
 
     fn update_output(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        output: smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _output: smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput,
     ) {
     }
 
     fn output_destroyed(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        output: smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _output: smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput,
     ) {
     }
 }
@@ -395,31 +396,31 @@ impl SeatHandler for WaylandState {
 
     fn new_seat(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
     ) {
     }
 
     fn new_capability(
         &mut self,
-        conn: &Connection,
+        _conn: &Connection,
         qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
         seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
         capability: smithay_client_toolkit::seat::Capability,
     ) {
         if capability == smithay_client_toolkit::seat::Capability::Pointer {
             info!("Pointer capability added to seat");
-            let pointer = self.seat_state.get_pointer(&qh, &seat).unwrap();
+            let pointer = self.seat_state.get_pointer(qh, &seat).unwrap();
             self.pointer = Some(pointer);
         }
     }
 
     fn remove_capability(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
         capability: smithay_client_toolkit::seat::Capability,
     ) {
         if capability == smithay_client_toolkit::seat::Capability::Pointer {
@@ -430,9 +431,9 @@ impl SeatHandler for WaylandState {
 
     fn remove_seat(
         &mut self,
-        conn: &Connection,
-        qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
-        seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
+        _conn: &Connection,
+        _qh: &smithay_client_toolkit::reexports::client::QueueHandle<Self>,
+        _seat: smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat,
     ) {
         if let Some(pointer) = self.pointer.take() {
             pointer.release();

@@ -97,5 +97,5 @@ fn map_nix_err(err: nix::Error) -> io::Error {
     if err == Errno::EAGAIN || err == Errno::EWOULDBLOCK {
         return io::Error::new(io::ErrorKind::WouldBlock, err.to_string());
     }
-    io::Error::new(io::ErrorKind::Other, err.to_string())
+    io::Error::other(err.to_string())
 }

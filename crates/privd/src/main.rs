@@ -297,10 +297,10 @@ fn parse_ipc_fd() -> Option<RawFd> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--ipc-fd" {
-            if let Some(v) = args.next() {
-                if let Ok(fd) = v.parse::<RawFd>() {
-                    return Some(fd);
-                }
+            if let Some(v) = args.next()
+                && let Ok(fd) = v.parse::<RawFd>()
+            {
+                return Some(fd);
             }
             return None;
         }
