@@ -19,25 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            curl \
-            git \
-            pkg-config \
-            clang \
-            libclang-dev \
-            libglib2.0-dev \
-            libpipewire-0.3-dev \
-            libdrm-dev \
-            libinput-dev \
-            libudev-dev \
-            libegl1-mesa-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev
+        run: bash .github/scripts/install-system-deps.sh ubuntu
 
       - name: Install Rust
         run: |
@@ -58,7 +40,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: framepipe-linux
+          name: framepipe-x86_64-unknown-linux-gnu
           path: |
             target/release/framepipe
             target/release/framepipe-privd
@@ -68,23 +50,27 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
 
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: framepipe-linux
+          name: framepipe-x86_64-unknown-linux-gnu
           path: artifacts
 
       - name: Package
         run: |
-          mkdir release
-          cp artifacts/* release/
-          tar -czvf framepipe-linux.tar.gz -C release .
+          archive_dir=framepipe-x86_64-unknown-linux-gnu
+          archive_name=${archive_dir}.tar.gz
+          mkdir -p release/${archive_dir}
+          cp artifacts/* release/${archive_dir}/
+          tar -czvf "${archive_name}" -C release "${archive_dir}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: framepipe-linux.tar.gz
+          files: framepipe-x86_64-unknown-linux-gnu.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
