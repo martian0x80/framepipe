@@ -185,10 +185,8 @@ fn get_best_capture_plane(
             let prop = card.get_property(*id).map_err(|_| ProbeError::Unknown)?;
             let name = prop.name().to_str().unwrap_or("Invalid UTF-8");
             match name {
-                "type" => {
-                    if *value == PlaneType::Cursor as u64 {
-                        is_cursor = true;
-                    }
+                "type" if *value == PlaneType::Cursor as u64 => {
+                    is_cursor = true;
                 }
                 "CRTC_W" => crtc_w = *value,
                 "CRTC_H" => crtc_h = *value,

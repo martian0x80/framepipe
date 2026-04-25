@@ -220,7 +220,7 @@ pub fn acquire_device_fds(
     }
 
     let mut input_fds = HashMap::new();
-    for (info, fd) in input_devices.into_iter().zip(fds.into_iter()) {
+    for (info, fd) in input_devices.into_iter().zip(fds) {
         input_fds.insert(PathBuf::from(info.path), fd);
     }
     log::info!(
