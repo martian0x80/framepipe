@@ -36,8 +36,7 @@ pub fn run_capture_session(
         options.connector,
         options.fps
     );
-    let use_mouse_tracking =
-        (options.cursor_composition) && !matches!(options.output, CaptureOutput::EmbeddedPreview);
+    let use_mouse_tracking = options.cursor_composition;
     let input_fds_for_tracker = if use_mouse_tracking {
         backend.take_input_fds()
     } else {

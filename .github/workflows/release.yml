@@ -54,6 +54,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -70,7 +73,11 @@ jobs:
       
       - name: Extract latest changelog
         run: |
-          awk '/^## /{i++} i==1' CHANGELOG.md > RELEASE_BODY.md
+          if [ -f CHANGELOG.md ]; then
+            awk '/^## /{i++} i==1' CHANGELOG.md > RELEASE_BODY.md
+          else
+            echo "Release ${GITHUB_REF_NAME}" > RELEASE_BODY.md
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1

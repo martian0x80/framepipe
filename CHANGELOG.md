@@ -1,3 +1,7 @@
+## [0.1.1] - 2026-04-25
+### Changed
+- Re-enabled cursor composition for embedded previews. Oops.
+
 ## [0.1.0] - 2026-04-25
 ### Added
 - Initial release of Framepipe, a zero-copy gpu accelerated screenrecorder for linux (wayland).
