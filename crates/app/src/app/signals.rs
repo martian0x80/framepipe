@@ -1,4 +1,7 @@
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use signal_hook::consts::signal::{SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
 use signal_hook::flag as signal_flag;
@@ -34,5 +37,24 @@ impl CaptureControl {
             .map_err(|e| format!("failed to register SIGUSR2: {e}"))?;
 
         Ok(control)
+    }
+
+    pub fn reset(&self) {
+        self.stop_requested.store(false, Ordering::Relaxed);
+        self.pause_req.store(false, Ordering::Relaxed);
+        self.resume_req.store(false, Ordering::Relaxed);
+        self.paused.store(false, Ordering::Relaxed);
+    }
+
+    pub fn request_stop(&self) {
+        self.stop_requested.store(true, Ordering::Relaxed);
+    }
+
+    pub fn request_pause(&self) {
+        self.pause_req.store(true, Ordering::Relaxed);
+    }
+
+    pub fn request_resume(&self) {
+        self.resume_req.store(true, Ordering::Relaxed);
     }
 }

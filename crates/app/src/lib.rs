@@ -6,6 +6,7 @@ pub mod embedded_preview;
 pub mod encode;
 pub mod portal;
 pub mod shared;
+pub mod utils;
 pub mod wayland;
 
 use eyre::Result;
@@ -22,7 +23,10 @@ pub fn init_logging(default_filter: &str) {
         );
         builder
             .format_timestamp_millis()
-            .filter_module("zbus", log::LevelFilter::Info);
+            .filter_module("zbus", log::LevelFilter::Warn)
+            .filter_module("wgpu_hal", log::LevelFilter::Off)
+            .filter_module("iced_wgpu", log::LevelFilter::Warn)
+            .filter_module("iced_winit", log::LevelFilter::Warn);
         let _ = builder.try_init();
     });
 }

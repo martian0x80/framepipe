@@ -54,6 +54,13 @@ impl Drop for EmbeddedPreviewSession {
 }
 
 pub fn start_embedded_preview(capture: CaptureArgs) -> Result<EmbeddedPreviewSession> {
+    start_embedded_preview_with_control(capture, CaptureControl::new_unregistered())
+}
+
+pub fn start_embedded_preview_with_control(
+    capture: CaptureArgs,
+    control: CaptureControl,
+) -> Result<EmbeddedPreviewSession> {
     let backend = capture.capture_backend;
     let mut options = config::build_capture_options(capture, CaptureOutput::EmbeddedPreview)?;
 
@@ -65,8 +72,6 @@ pub fn start_embedded_preview(capture: CaptureArgs) -> Result<EmbeddedPreviewSes
     // its first update.
     let live_settings = LiveSettingsMailbox::new(LiveSettings::from_options(&options));
     options.live_settings = Some(live_settings.clone());
-
-    let control = CaptureControl::new_unregistered();
 
     let worker_control = control.clone();
     let worker = thread::spawn(move || {

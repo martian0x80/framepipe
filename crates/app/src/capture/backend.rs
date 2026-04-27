@@ -1,7 +1,8 @@
 use crate::{
     capture::types::CaptureFrame,
     drm_kms::{egl_context::EglError, types::CaptureOptions},
-    portal::notifs::{ProcessState, send_notification},
+    portal::notifs::send_notification,
+    utils::types::ProcessState,
 };
 use khronos_egl as egl;
 

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 #[path = "ui.rs"]
@@ -7,6 +8,7 @@ mod ui;
 use framepipe::app::cli::CaptureArgs;
 use framepipe::drm_kms::types::LiveSettings;
 use framepipe::embedded_preview::EmbeddedPreviewSession;
+use framepipe::utils::tray::{TrayCallbacks, TrayController, spawn_tray};
 use iced::{Subscription, Task, Theme};
 
 use crate::model::{
@@ -88,6 +90,13 @@ pub enum Message {
     TogglePauseRecording,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum TrayCommand {
+    StartRecording,
+    StopRecording,
+    TogglePause,
+}
+
 pub struct App {
     mode: AppMode,
     status: String,
@@ -98,16 +107,21 @@ pub struct App {
     fixed_dirty: bool,
 
     preview_session: Option<EmbeddedPreviewSession>,
+    preview_join_thread: Option<std::thread::JoinHandle<Result<(), String>>>,
+    pending_preview_start: bool,
     preview_program: Option<PreviewProgram>,
     preview_mailbox: Option<common::types::PreviewMailbox>,
     live_mailbox: Option<framepipe::drm_kms::types::LiveSettingsMailbox>,
 
     record_started_at: Option<Instant>,
+    signal_control: framepipe::app::signals::CaptureControl,
     record_control: Option<framepipe::app::signals::CaptureControl>,
-    record_thread: Option<std::thread::JoinHandle<()>>,
+    record_thread: Option<std::thread::JoinHandle<Result<(), String>>>,
     preview_control: Option<framepipe::app::signals::CaptureControl>,
     paused: bool,
     ui_tick: u64,
+    tray_rx: Option<mpsc::Receiver<TrayCommand>>,
+    tray: Option<TrayController>,
 
     theme: Option<Theme>,
     background_cache: Option<iced::widget::image::Handle>,
@@ -116,6 +130,11 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         framepipe::init_logging("info");
+        let signal_control =
+            framepipe::app::signals::CaptureControl::register().unwrap_or_else(|e| {
+                log::warn!("failed to register capture control signals in GUI: {e}");
+                framepipe::app::signals::CaptureControl::new_unregistered()
+            });
         let fixed = FixedOptions {
             source: SourceChoice::MonitorKms,
             ..Default::default()
@@ -126,7 +145,7 @@ impl App {
             ..Default::default()
         };
 
-        Self {
+        let mut app = Self {
             mode: AppMode::Idle,
             status: "Idle. ".to_string(),
             fixed,
@@ -134,20 +153,64 @@ impl App {
             show_advanced: false,
             fixed_dirty: false,
             preview_session: None,
+            preview_join_thread: None,
+            pending_preview_start: false,
             preview_program: None,
             preview_mailbox: None,
             live_mailbox: None,
             record_started_at: None,
+            signal_control,
             record_control: None,
             record_thread: None,
             preview_control: None,
             paused: false,
             ui_tick: 0,
+            tray_rx: None,
+            tray: None,
             theme: Some(Theme::Moonfly),
-            background_cache: Some(iced::widget::image::Handle::from_path(
-                "assets/grainy_bg1.png",
+            background_cache: Some(iced::widget::image::Handle::from_bytes(
+                &std::include_bytes!("../../../assets/grainy_bg1.png")[..],
             )),
-        }
+        };
+
+        let (tx, rx) = mpsc::channel::<TrayCommand>();
+        let callbacks = TrayCallbacks {
+            start_recording: {
+                let tx = tx.clone();
+                std::sync::Arc::new(move || {
+                    let _ = tx.send(TrayCommand::StartRecording);
+                })
+            },
+            stop_recording: {
+                let tx = tx.clone();
+                std::sync::Arc::new(move || {
+                    let _ = tx.send(TrayCommand::StopRecording);
+                })
+            },
+            pause_recording: {
+                let tx = tx.clone();
+                std::sync::Arc::new(move || {
+                    let _ = tx.send(TrayCommand::TogglePause);
+                })
+            },
+            resume_recording: {
+                let tx = tx.clone();
+                std::sync::Arc::new(move || {
+                    let _ = tx.send(TrayCommand::TogglePause);
+                })
+            },
+            hide_window: std::sync::Arc::new(|| {}),
+            show_window: std::sync::Arc::new(|| {}),
+            quit: std::sync::Arc::new(|| std::process::exit(0)),
+        };
+        app.tray = spawn_tray(
+            framepipe::utils::types::ProcessState::Stopped(None),
+            callbacks,
+        )
+        .ok();
+        app.tray_rx = Some(rx);
+
+        app
     }
 
     pub fn btn<'a>(
@@ -286,10 +349,11 @@ impl App {
 
     fn stop_preview_session(&mut self) {
         if let Some(session) = self.preview_session.take() {
-            // Synchronously join the old session so the portal PipeWire stream
-            // is fully torn down before we allow a new session to start.
             session.stop();
-            let _ = session.join();
+            self.preview_join_thread = Some(std::thread::spawn(move || {
+                session.join().map_err(|e| e.to_string())
+            }));
+            self.status = "Stopping preview…".to_string();
         }
         self.preview_program = None;
         self.preview_mailbox = None;
@@ -301,9 +365,121 @@ impl App {
         }
     }
 
+    fn poll_background_threads(&mut self) {
+        if let Some(handle) = self.preview_join_thread.as_ref()
+            && handle.is_finished()
+        {
+            let handle = self
+                .preview_join_thread
+                .take()
+                .expect("preview join thread exists");
+            match handle.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    self.status = format!("Preview stop failed: {e}");
+                    log::warn!("preview stop failed: {e}");
+                }
+                Err(_) => {
+                    self.status = "Preview stop thread panicked".to_string();
+                    log::warn!("preview stop thread panicked");
+                }
+            }
+            if self.pending_preview_start {
+                self.pending_preview_start = false;
+                self.start_preview_session();
+            }
+        }
+
+        if let Some(handle) = self.record_thread.as_ref()
+            && handle.is_finished()
+        {
+            let handle = self.record_thread.take().expect("record thread exists");
+            let result = handle
+                .join()
+                .map_err(|_| "record thread panicked".to_string())
+                .and_then(|v| v);
+            self.record_started_at = None;
+            self.record_control = None;
+            self.paused = false;
+            self.mode = AppMode::Idle;
+            match result {
+                Ok(()) => {
+                    self.status = "Recording stopped".to_string();
+                }
+                Err(e) => {
+                    self.status = format!("Recording failed: {e}");
+                    log::warn!("recording failed: {e}");
+                }
+            }
+        }
+    }
+
+    fn process_tray_commands(&mut self) {
+        let mut pending = Vec::new();
+        if let Some(rx) = &self.tray_rx {
+            while let Ok(cmd) = rx.try_recv() {
+                pending.push(cmd);
+            }
+        }
+        for cmd in pending {
+            match cmd {
+                TrayCommand::StartRecording => {
+                    if matches!(self.mode, AppMode::Idle) {
+                        let _ = self.update(Message::StartRecording);
+                    }
+                }
+                TrayCommand::StopRecording => {
+                    if matches!(self.mode, AppMode::Recording) {
+                        let _ = self.update(Message::StopRecording);
+                    }
+                }
+                TrayCommand::TogglePause => {
+                    if matches!(self.mode, AppMode::Recording) {
+                        let _ = self.update(Message::TogglePauseRecording);
+                    }
+                }
+            }
+        }
+    }
+
+    fn sync_tray_state(&self) {
+        if let Some(tray) = &self.tray {
+            let state = match self.mode {
+                AppMode::Recording if self.paused => framepipe::utils::types::ProcessState::Paused,
+                AppMode::Recording => framepipe::utils::types::ProcessState::Running,
+                AppMode::Preview => framepipe::utils::types::ProcessState::Preview,
+                AppMode::Idle => framepipe::utils::types::ProcessState::Stopped(None),
+            };
+            tray.set_process_state(state);
+            let control = if matches!(self.mode, AppMode::Recording) {
+                self.record_control.clone()
+            } else if matches!(self.mode, AppMode::Preview) {
+                self.preview_control.clone()
+            } else {
+                None
+            };
+            tray.set_capture_control(control);
+        }
+    }
+
     fn start_preview_session(&mut self) {
+        if self.preview_join_thread.is_some() {
+            self.pending_preview_start = true;
+            self.status = "Waiting for previous preview to stop…".to_string();
+            return;
+        }
         self.stop_preview_session();
-        match framepipe::embedded_preview::start_embedded_preview(self.build_capture_args()) {
+        if self.preview_join_thread.is_some() {
+            self.pending_preview_start = true;
+            self.status = "Waiting for previous preview to stop…".to_string();
+            return;
+        }
+
+        self.signal_control.reset();
+        match framepipe::embedded_preview::start_embedded_preview_with_control(
+            self.build_capture_args(),
+            self.signal_control.clone(),
+        ) {
             Ok(session) => {
                 let preview_mailbox = session.mailbox();
                 let live_mailbox = session.live_settings();
@@ -343,6 +519,9 @@ impl App {
             }
             Message::Tick => {
                 self.ui_tick = self.ui_tick.wrapping_add(1);
+                self.poll_background_threads();
+                self.process_tray_commands();
+                self.sync_tray_state();
                 Task::none()
             }
             Message::TogglePreview => {
@@ -365,6 +544,10 @@ impl App {
             }
             Message::StartRecording => {
                 self.stop_preview_session();
+                if self.preview_join_thread.is_some() {
+                    self.status = "Waiting for preview teardown before recording…".to_string();
+                    return Task::none();
+                }
                 let output = self.fixed.output_path.clone().unwrap_or_else(|| {
                     let fmt = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
                     let filename = format!("framepipe_record_{}.mp4", fmt);
@@ -376,7 +559,8 @@ impl App {
                     }
                 });
 
-                let control = framepipe::app::signals::CaptureControl::new_unregistered();
+                self.signal_control.reset();
+                let control = self.signal_control.clone();
                 let args = self.build_capture_args();
                 let backend = args.capture_backend;
 
@@ -390,8 +574,9 @@ impl App {
                         self.status = format!("Recording to {}", output.display());
                         self.record_control = Some(control.clone());
                         self.record_thread = Some(std::thread::spawn(move || {
-                            let _ = framepipe::app::app::RecordingSession::new(options, backend)
-                                .map(|s| s.run(control));
+                            framepipe::app::app::RecordingSession::new(options, backend)
+                                .and_then(|s| s.run(control))
+                                .map_err(|e| e.to_string())
                         }));
                     }
                     Err(e) => {
@@ -401,18 +586,11 @@ impl App {
                 Task::none()
             }
             Message::StopRecording => {
-                self.mode = AppMode::Idle;
-                self.record_started_at = None;
                 if let Some(control) = self.record_control.take() {
-                    control
-                        .stop_requested
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
-                }
-                if let Some(thread) = self.record_thread.take() {
-                    let _ = thread.join();
+                    control.request_stop();
                 }
                 self.status = format!(
-                    "Recording stopped. Output target: {}",
+                    "Stopping recording. Output target: {}",
                     self.fixed
                         .output_path
                         .as_ref()
@@ -724,11 +902,13 @@ impl App {
             Message::TogglePausePreview => {
                 if let Some(ctrl) = &self.preview_control {
                     if self.paused {
+                        ctrl.request_resume();
                         ctrl.paused
                             .store(false, std::sync::atomic::Ordering::Relaxed);
                         self.paused = false;
                         self.status = "Preview resumed".to_string();
                     } else {
+                        ctrl.request_pause();
                         ctrl.paused
                             .store(true, std::sync::atomic::Ordering::Relaxed);
                         self.paused = true;
@@ -740,6 +920,7 @@ impl App {
             Message::TogglePauseRecording => {
                 if let Some(ctrl) = &self.record_control {
                     if self.paused {
+                        ctrl.request_resume();
                         ctrl.paused
                             .store(false, std::sync::atomic::Ordering::Relaxed);
                         self.paused = false;
@@ -752,6 +933,7 @@ impl App {
                                 .unwrap_or_else(|| "Dynamic".to_string())
                         );
                     } else {
+                        ctrl.request_pause();
                         ctrl.paused
                             .store(true, std::sync::atomic::Ordering::Relaxed);
                         self.paused = true;
@@ -770,6 +952,16 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        self.tray = None;
         self.stop_preview_session();
+        if let Some(handle) = self.preview_join_thread.take() {
+            let _ = handle.join();
+        }
+        if let Some(control) = self.record_control.take() {
+            control.request_stop();
+        }
+        if let Some(handle) = self.record_thread.take() {
+            let _ = handle.join();
+        }
     }
 }

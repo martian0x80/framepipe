@@ -3,7 +3,7 @@ use std::{
     fs,
     num::NonZero,
     ops::Div as _,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, atomic::Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -19,7 +19,7 @@ use crate::drm_kms::{
 use crate::shared::mouse_ring::RingBuffer;
 use crate::wayland::layer::{TrackingControl, init_wayland};
 use crate::wayland::types::MouseTrackRecordingInfo;
-use crate::{app::signals::CaptureControl, drm_kms::types::Profile, portal::notifs::ProcessState};
+use crate::{app::signals::CaptureControl, drm_kms::types::Profile, utils::types::ProcessState};
 
 use crate::drm_kms::egl_context::{
     EglCtx, EglError, delete_gl_texture, import_capture_frame_texture, init_egl,
@@ -116,9 +116,9 @@ pub fn run_capture_session(
     log::debug!("EGL context initialized");
     backend.on_egl_ready(&egl, display)?;
     let pstate = match options.output {
-        CaptureOutput::File(_) => crate::portal::notifs::ProcessState::Running,
-        CaptureOutput::Preview => crate::portal::notifs::ProcessState::Preview,
-        CaptureOutput::EmbeddedPreview => crate::portal::notifs::ProcessState::Preview,
+        CaptureOutput::File(_) => ProcessState::Running,
+        CaptureOutput::Preview => ProcessState::Preview,
+        CaptureOutput::EmbeddedPreview => ProcessState::Preview,
     };
     let _ = backend.send_notification(pstate, 1);
     let mut first_frame = None;
@@ -383,8 +383,11 @@ pub fn run_capture_session(
             let result = match live.cursor_sprite.as_deref() {
                 Some(path) => load_rgba_texture(&pipelines[0].gl, path)
                     .map(|(t, w, h)| (Some(t), w * scale, h * scale)),
-                None => load_rgba_texture(&pipelines[0].gl, Path::new("assets/default_dark.png"))
-                    .map(|(t, w, h)| (Some(t), w * 2.0 * scale, h * 2.0 * scale)),
+                None => load_rgba_texture(
+                    &pipelines[0].gl,
+                    &std::include_bytes!("../../../../assets/default_dark.png")[..],
+                )
+                .map(|(t, w, h)| (Some(t), w * 2.0 * scale, h * 2.0 * scale)),
             };
             match result {
                 Ok((t, w, h)) => {

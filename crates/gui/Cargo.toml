@@ -14,3 +14,4 @@ rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] 
 clap = { workspace = true, features = ["derive"] }
 chrono = "0.4.44"
 dirs = "6.0.0"
+image = "0.25.10"

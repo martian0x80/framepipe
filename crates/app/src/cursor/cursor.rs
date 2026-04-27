@@ -1,6 +1,7 @@
 use glow::HasContext;
 use std::{
-    path::Path,
+    borrow::Cow,
+    path::{Path, PathBuf},
     sync::{Arc, atomic::Ordering},
     thread,
 };
@@ -90,21 +91,50 @@ pub struct MouseTrackingWorker {
     pub handle: Option<thread::JoinHandle<()>>,
 }
 
+/// A cursor texture can be loaded from a file or from memory.
+pub enum CursorTextureSource<'a> {
+    File(Cow<'a, Path>),
+    Memory(Cow<'a, [u8]>),
+}
+
+impl<'a> From<&'a PathBuf> for CursorTextureSource<'a> {
+    fn from(path: &'a PathBuf) -> Self {
+        CursorTextureSource::File(Cow::Borrowed(path.as_path()))
+    }
+}
+
+impl<'a> From<&'a Path> for CursorTextureSource<'a> {
+    fn from(path: &'a Path) -> Self {
+        CursorTextureSource::File(Cow::Borrowed(path))
+    }
+}
+
+impl<'a> From<&'a [u8]> for CursorTextureSource<'a> {
+    fn from(data: &'a [u8]) -> Self {
+        CursorTextureSource::Memory(Cow::Borrowed(data))
+    }
+}
+
 /// Load a PNG or JPEG image from `path` and upload it as an RGBA8 GL texture.
 /// Returns `(texture, width_f32, height_f32)` on success.
-pub fn load_rgba_texture(
+pub fn load_rgba_texture<'a>(
     gl: &glow::Context,
-    path: &Path,
+    source: impl Into<CursorTextureSource<'a>>,
 ) -> Result<(glow::NativeTexture, f32, f32), String> {
-    let img = image::open(path)
-        .map_err(|e| format!("failed to load image {}: {e}", path.display()))?
-        .to_rgba8();
+    let source = source.into();
+    let img = match source {
+        CursorTextureSource::File(path) => image::open(&path)
+            .map_err(|e| format!("failed to load image {}: {e}", path.display()))?,
+        CursorTextureSource::Memory(data) => image::load_from_memory(&data)
+            .map_err(|e| format!("failed to load image from memory: {e}"))?,
+    }
+    .to_rgba8();
     let w = img.width() as i32;
     let h = img.height() as i32;
     if w <= 0 || h <= 0 {
         return Err(format!(
-            "invalid cursor sprite dimensions for {}",
-            path.display()
+            "invalid cursor sprite dimensions for image ({}x{})",
+            w, h
         ));
     }
 

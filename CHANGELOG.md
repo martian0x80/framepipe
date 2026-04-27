@@ -1,3 +1,10 @@
+## [0.1.2] - 2026-04-27
+### Changed
+- Add tray icon support with KDE StatusNotifierItem (ksni).
+- Fix for missing assets, and embed assets at compile time.
+- Filter some noisy log messages from dependencies.
+- Add icons.
+
 ## [0.1.1] - 2026-04-25
 ### Changed
 - Re-enabled cursor composition for embedded previews. Oops.
