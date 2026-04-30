@@ -236,6 +236,15 @@ fn qsv_encoder_name(codec: &VideoCodec) -> &'static str {
     }
 }
 
+fn encoder_factory_name(backend: &EncoderBackend, codec: &VideoCodec) -> &'static str {
+    match backend {
+        EncoderBackend::Vaapi => vaapi_encoder_name(codec),
+        EncoderBackend::Qsv => qsv_encoder_name(codec),
+        EncoderBackend::Vulkan => vulkan_encoder_name(codec),
+        EncoderBackend::Cpu => cpu_encoder_name(codec),
+    }
+}
+
 fn h264_profile_from_quality(quality: &QualityPreset) -> &'static str {
     match quality {
         QualityPreset::Low => "constrained-baseline",
@@ -311,6 +320,20 @@ fn render_encoder_props(factory_name: &str, props: Vec<(&'static str, String)>) 
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn encoder_rate_control_values(factory_name: &str) -> Option<HashSet<String>> {
+    let factory = gst::ElementFactory::find(factory_name)?;
+    let elem = factory.create().build().ok()?;
+    let pspec = elem.find_property("rate-control")?;
+    let enum_class = glib::EnumClass::with_type(pspec.value_type())?;
+    Some(
+        enum_class
+            .values()
+            .iter()
+            .map(|v| v.nick().to_string())
+            .collect(),
+    )
 }
 
 fn is_codec_supported(backend: &EncoderBackend, codec: &VideoCodec) -> bool {
@@ -624,6 +647,105 @@ fn default_rate_control_for(backend: &EncoderBackend, codec: &VideoCodec) -> Bit
     }
 }
 
+fn bitrate_mode_priority(backend: &EncoderBackend, codec: &VideoCodec) -> Vec<BitrateMode> {
+    match (backend, codec) {
+        (EncoderBackend::Vaapi, VideoCodec::H264 | VideoCodec::H265) => vec![
+            BitrateMode::Icq,
+            BitrateMode::Cqp,
+            BitrateMode::Qvbr,
+            BitrateMode::Vbr,
+            BitrateMode::Cbr,
+            BitrateMode::Vcm,
+        ],
+        (EncoderBackend::Vaapi, VideoCodec::Av1) => {
+            vec![
+                BitrateMode::Icq,
+                BitrateMode::Cqp,
+                BitrateMode::Vbr,
+                BitrateMode::Cbr,
+            ]
+        }
+        (EncoderBackend::Qsv, VideoCodec::H264 | VideoCodec::H265) => vec![
+            BitrateMode::Icq,
+            BitrateMode::Cqp,
+            BitrateMode::Qvbr,
+            BitrateMode::Vbr,
+            BitrateMode::Cbr,
+            BitrateMode::Vcm,
+        ],
+        (EncoderBackend::Qsv, VideoCodec::Av1) => {
+            vec![BitrateMode::Cqp, BitrateMode::Vbr, BitrateMode::Cbr]
+        }
+        (EncoderBackend::Vulkan, _) => vec![BitrateMode::Cqp, BitrateMode::Vbr, BitrateMode::Cbr],
+        (EncoderBackend::Cpu, _) => vec![
+            BitrateMode::Qual,
+            BitrateMode::Quant,
+            BitrateMode::Cbr,
+            BitrateMode::Pass1,
+            BitrateMode::Pass2,
+            BitrateMode::Pass3,
+        ],
+    }
+}
+
+fn rate_control_nick_for(
+    backend: &EncoderBackend,
+    codec: &VideoCodec,
+    mode: &BitrateMode,
+) -> Option<&'static str> {
+    match backend {
+        EncoderBackend::Vaapi => vaapi_rate_control(mode, codec).ok(),
+        EncoderBackend::Qsv => qsv_rate_control(mode, codec).ok(),
+        EncoderBackend::Vulkan => vulkan_rate_control(mode).ok(),
+        EncoderBackend::Cpu => cpu_rate_control(mode).ok(),
+    }
+}
+
+fn resolve_rate_control_mode(
+    backend: &EncoderBackend,
+    codec: &VideoCodec,
+    requested_mode: &BitrateMode,
+) -> Result<BitrateMode, EncodeError> {
+    let factory_name = encoder_factory_name(backend, codec);
+    let supported = encoder_rate_control_values(factory_name);
+
+    let mut candidates = Vec::new();
+    candidates.push(requested_mode.clone());
+    for mode in bitrate_mode_priority(backend, codec) {
+        if !candidates.contains(&mode) {
+            candidates.push(mode);
+        }
+    }
+
+    for mode in candidates {
+        let Some(rc_nick) = rate_control_nick_for(backend, codec, &mode) else {
+            continue;
+        };
+        if let Some(supported) = &supported
+            && !supported.contains(rc_nick)
+        {
+            continue;
+        }
+        if &mode != requested_mode {
+            log::warn!(
+                "rate-control {:?} unavailable on {} for {:?}/{:?}; falling back to {:?} ({})",
+                requested_mode,
+                factory_name,
+                backend,
+                codec,
+                mode,
+                rc_nick
+            );
+        }
+        return Ok(mode);
+    }
+
+    Err(EncodeError::InvalidConfig(format!(
+        "no supported rate-control found for backend={:?} codec={:?} encoder={}",
+        backend, codec, factory_name
+    )))
+}
+
 impl GstEncoder {
     pub fn new_with_output(
         output: EncoderOutput<'_>,
@@ -642,16 +764,33 @@ impl GstEncoder {
                 options.encoder_backend, options.video_codec
             )));
         }
+        let requested_mode = if options.bitrate_mode == BitrateMode::Default {
+            default_rate_control_for(&options.encoder_backend, &options.video_codec)
+        } else {
+            options.bitrate_mode.clone()
+        };
+        let selected_mode = resolve_rate_control_mode(
+            &options.encoder_backend,
+            &options.video_codec,
+            &requested_mode,
+        )?;
         if options.bitrate_mode == BitrateMode::Default {
-            let selected = default_rate_control_for(&options.encoder_backend, &options.video_codec);
             log::info!(
                 "rate-control=default resolved to {:?} for backend={:?} codec={:?}",
-                selected,
+                selected_mode,
                 options.encoder_backend,
                 options.video_codec
             );
-            options.bitrate_mode = selected;
+        } else if selected_mode != options.bitrate_mode {
+            log::warn!(
+                "requested rate-control {:?} resolved to {:?} for backend={:?} codec={:?}",
+                options.bitrate_mode,
+                selected_mode,
+                options.encoder_backend,
+                options.video_codec
+            );
         }
+        options.bitrate_mode = selected_mode;
         let fps = options.fps.max(1);
         let auto_floor = auto_bitrate_floor_kbps(ex.width, ex.height, fps, &options.bitrate_mode);
         let requested = options.bitrate_kbps.max(1);
