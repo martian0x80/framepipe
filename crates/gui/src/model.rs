@@ -15,6 +15,12 @@ pub enum AppMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiPage {
+    Configure,
+    Record,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceChoice {
     MonitorKms,
     Portal,

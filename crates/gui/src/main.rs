@@ -11,16 +11,21 @@ fn main() -> iced::Result {
         include_bytes!("../../../assets/icons/icon-512.png"),
         image::ImageFormat::Png,
     );
+    let dialog_size = iced::Size {
+        width: 1000.0,
+        height: 600.0,
+    };
     iced::application(App::new, App::update, App::view)
         .window(iced::window::Settings {
-            size: iced::Size {
-                width: 1200.0,
-                height: 600.0,
-            },
+            size: dialog_size,
             resizable: true,
             icon: Some(
                 icon::from_rgba(icon.unwrap().to_rgba8().into_raw(), 512, 512).expect("valid icon"),
             ),
+            max_size: Some(dialog_size),
+            min_size: Some(dialog_size),
+            decorations: false,
+            position: iced::window::Position::Centered,
             ..Default::default()
         })
         .theme(App::theme)

@@ -1,6 +1,6 @@
 use crate::app::{App, Message};
 use crate::model::{
-    BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
+    AppMode, BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
     FrameRateModeChoice, ProfileChoice, QualityChoice, SourceChoice,
 };
 use crate::theme::get_all_themes;
@@ -32,73 +32,31 @@ impl App {
         .into()
     }
 
-    fn action_buttons(&self) -> Element<'_, Message> {
-        if matches!(self.mode, crate::model::AppMode::Recording) {
-            let pause_label = if self.paused {
-                "Resume Recording"
-            } else {
-                "Pause Recording"
-            };
-            return column![
-                App::btn(text("Stop Recording").size(26))
-                    .padding([16, 18])
-                    .width(Length::Fill)
-                    .style(button::danger)
-                    .on_press(Message::StopRecording),
-                App::btn(text(pause_label).size(18))
-                    .padding([10, 14])
-                    .width(Length::Fill)
-                    .style(button::secondary)
-                    .on_press(Message::TogglePauseRecording),
-                text(format!("Recording {}", self.recording_elapsed())).size(18),
-            ]
-            .spacing(10)
-            .into();
-        }
-
-        let preview_label = if matches!(self.mode, crate::model::AppMode::Preview) {
-            "Disable Preview"
-        } else {
-            "Enable Preview"
-        };
-
-        let mut col = column![
-            App::btn(text("Record").size(30))
-                .padding([18, 20])
-                .width(Length::Fill)
-                .style(button::primary)
-                .on_press(Message::StartRecording),
-            App::btn(text(preview_label).size(18))
-                .padding([12, 16])
-                .width(Length::Fill)
-                .style(button::secondary)
-                .on_press(Message::TogglePreview),
+    fn output_path_row(&self, disabled: bool) -> iced::widget::Row<'_, Message> {
+        row![
+            text("Output"),
+            container(
+                text(match &self.fixed.output_path {
+                    Some(path) => Self::short_path(Some(path)),
+                    None => match dirs::video_dir() {
+                        Some(v) => format!("{}/framepipe_record_<time>.mp4", v.display()),
+                        None => "framepipe_record_<time>.mp4".to_string(),
+                    },
+                })
+                .size(13)
+            )
+            .width(Length::Fill),
+            App::btn("Browse").on_press_maybe((!disabled).then_some(Message::PickOutputPath)),
+            App::btn("Clear").on_press_maybe((!disabled).then_some(Message::OutputPathCleared)),
         ]
-        .spacing(8);
-
-        if matches!(self.mode, crate::model::AppMode::Preview) {
-            let pause_label = if self.paused {
-                "Resume Preview"
-            } else {
-                "Pause Preview"
-            };
-            col = col.push(
-                App::btn(text(pause_label).size(16))
-                    .padding([8, 12])
-                    .width(Length::Fill)
-                    .style(button::secondary)
-                    .on_press(Message::TogglePausePreview),
-            );
-        }
-
-        col.into()
+        .spacing(8)
+        .align_y(Alignment::Center)
     }
 
-    pub(super) fn controls_panel(&self) -> Element<'_, Message> {
+    pub(super) fn configure_controls_panel(&self) -> Element<'_, Message> {
         let disabled = matches!(self.mode, crate::model::AppMode::Recording);
 
         let mut controls = column![
-            self.action_buttons(),
             Self::section_heading("Capture"),
             row![
                 text("Source"),
@@ -178,26 +136,7 @@ impl App {
             ]
             .spacing(8)
             .align_y(Alignment::Center),
-            row![
-                text("Output"),
-                container(
-                    text(match &self.fixed.output_path {
-                        Some(path) => Self::short_path(Some(path)),
-                        None => {
-                            match dirs::video_dir() {
-                                Some(v) => format!("{}/framepipe_record_<time>.mp4", v.display()),
-                                None => "framepipe_record_<time>.mp4".to_string(),
-                            }
-                        }
-                    })
-                    .size(13)
-                )
-                .width(Length::Fill),
-                App::btn("Browse").on_press_maybe((!disabled).then_some(Message::PickOutputPath)),
-                App::btn("Clear").on_press_maybe((!disabled).then_some(Message::OutputPathCleared)),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
+            self.output_path_row(disabled),
             row![
                 toggler(self.live.background_enabled)
                     .label("Background")
@@ -672,5 +611,53 @@ impl App {
         .width(Length::FillPortion(2))
         .max_width(560)
         .into()
+    }
+
+    pub(super) fn record_controls_panel(&self) -> Element<'_, Message> {
+        let recording = matches!(self.mode, AppMode::Recording);
+        let paused = self.paused;
+        let controls = if recording {
+            column![
+                App::btn(text("Stop Recording").size(28))
+                    .padding([16, 18])
+                    .width(Length::Fill)
+                    .style(button::danger)
+                    .on_press(Message::StopRecording),
+                App::btn(if paused {
+                    "Resume Recording"
+                } else {
+                    "Pause Recording"
+                })
+                .padding([12, 16])
+                .width(Length::Fill)
+                .style(button::secondary)
+                .on_press(Message::TogglePauseRecording),
+            ]
+            .spacing(10)
+        } else {
+            column![
+                App::btn(text("Start Recording").size(30))
+                    .padding([18, 20])
+                    .width(Length::Fill)
+                    .style(button::primary)
+                    .on_press(Message::StartRecording),
+            ]
+            .spacing(10)
+        };
+
+        let panel = column![
+            Self::section_heading("Record"),
+            controls,
+            self.output_path_row(recording),
+        ]
+        .spacing(10);
+
+        container(panel)
+            .padding(12)
+            .style(iced::widget::container::rounded_box)
+            .height(Length::Fill)
+            .width(Length::FillPortion(2))
+            .max_width(640)
+            .into()
     }
 }

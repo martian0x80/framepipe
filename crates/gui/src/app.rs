@@ -13,7 +13,7 @@ use iced::{Subscription, Task, Theme};
 
 use crate::model::{
     AppMode, BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
-    FixedOptions, FrameRateModeChoice, ProfileChoice, QualityChoice, SourceChoice,
+    FixedOptions, FrameRateModeChoice, ProfileChoice, QualityChoice, SourceChoice, UiPage,
 };
 use crate::preview_shader::PreviewProgram;
 
@@ -88,6 +88,8 @@ pub enum Message {
 
     TogglePausePreview,
     TogglePauseRecording,
+    GoToConfigurePage,
+    GoToRecordPage,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,6 +101,7 @@ enum TrayCommand {
 
 pub struct App {
     mode: AppMode,
+    page: UiPage,
     status: String,
 
     fixed: FixedOptions,
@@ -147,6 +150,7 @@ impl App {
 
         let mut app = Self {
             mode: AppMode::Idle,
+            page: UiPage::Configure,
             status: "Idle. ".to_string(),
             fixed,
             live,
@@ -425,6 +429,7 @@ impl App {
             match cmd {
                 TrayCommand::StartRecording => {
                     if matches!(self.mode, AppMode::Idle) {
+                        self.page = UiPage::Record;
                         let _ = self.update(Message::StartRecording);
                     }
                 }
@@ -463,6 +468,7 @@ impl App {
     }
 
     fn start_preview_session(&mut self) {
+        self.page = UiPage::Configure;
         if self.preview_join_thread.is_some() {
             self.pending_preview_start = true;
             self.status = "Waiting for previous preview to stop…".to_string();
@@ -543,6 +549,7 @@ impl App {
                 Task::none()
             }
             Message::StartRecording => {
+                self.page = UiPage::Record;
                 self.stop_preview_session();
                 if self.preview_join_thread.is_some() {
                     self.status = "Waiting for preview teardown before recording…".to_string();
@@ -597,6 +604,20 @@ impl App {
                         .map(|p| p.to_string_lossy().into_owned())
                         .unwrap_or_else(|| "Dynamic".to_string())
                 );
+                Task::none()
+            }
+            Message::GoToConfigurePage => {
+                if matches!(self.mode, AppMode::Recording) {
+                    return Task::none();
+                }
+                self.page = UiPage::Configure;
+                Task::none()
+            }
+            Message::GoToRecordPage => {
+                if matches!(self.mode, AppMode::Preview) {
+                    self.stop_preview_session();
+                }
+                self.page = UiPage::Record;
                 Task::none()
             }
             Message::ToggleAdvanced => {

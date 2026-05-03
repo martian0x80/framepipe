@@ -1,8 +1,9 @@
 use iced::widget::shader::Shader as ShaderWidget;
-use iced::widget::{column, container, image, row, stack, text};
+use iced::widget::{button, column, container, image, row, stack, text};
 use iced::{Alignment, Color, Element, Length, Theme};
 
 use crate::app::{App, Message};
+use crate::model::UiPage;
 
 impl App {
     fn preview_panel(&self) -> Element<'_, Message> {
@@ -120,6 +121,56 @@ impl App {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
+        let preview_label = if matches!(self.mode, crate::model::AppMode::Preview) {
+            "Disable Preview"
+        } else {
+            "Enable Preview"
+        };
+        let nav = match self.page {
+            UiPage::Configure => row![
+                App::btn(preview_label)
+                    .style(button::secondary)
+                    .on_press(Message::TogglePreview),
+                App::btn("Record")
+                    .style(button::primary)
+                    .on_press(Message::GoToRecordPage),
+            ]
+            .spacing(8),
+            UiPage::Record => row![
+                App::btn("Back").style(button::secondary).on_press_maybe(
+                    (!matches!(self.mode, crate::model::AppMode::Recording))
+                        .then_some(Message::GoToConfigurePage)
+                ),
+                if matches!(self.mode, crate::model::AppMode::Recording) {
+                    App::btn(if self.paused {
+                        "Resume Recording"
+                    } else {
+                        "Pause Recording"
+                    })
+                    .style(button::secondary)
+                    .on_press(Message::TogglePauseRecording)
+                } else {
+                    App::btn("Start Recording")
+                        .style(button::primary)
+                        .on_press(Message::StartRecording)
+                },
+            ]
+            .spacing(8),
+        };
+
+        let content: Element<'_, Message> = match self.page {
+            UiPage::Configure => row![self.configure_controls_panel(), self.preview_panel()]
+                .spacing(12)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            UiPage::Record => row![self.record_controls_panel()]
+                .spacing(12)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+        };
+
         container(
             column![
                 row![
@@ -130,10 +181,8 @@ impl App {
                         .color(Color::from_rgb(0.7, 0.7, 0.7)),
                 ]
                 .align_y(Alignment::Center),
-                row![self.controls_panel(), self.preview_panel()]
-                    .spacing(12)
-                    .width(Length::Fill)
-                    .height(Length::Fill),
+                nav,
+                content,
             ]
             .spacing(10)
             .padding(12),
