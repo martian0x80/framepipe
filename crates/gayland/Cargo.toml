@@ -1,0 +1,36 @@
+[package]
+name = "gayland"
+edition = "2024"
+version.workspace = true
+description = "wayland experimentation for framepipe. global input tracking and layer-shell anchoring."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/martian0x80/framepipe/tree/dev/crates/gayland"
+homepage = "https://github.com/martian0x80/framepipe"
+readme = "README.md"
+keywords = ["wayland", "libinput", "input", "cursor", "layer-shell"]
+categories = ["api-bindings", "os::linux-apis"]
+include = [
+    "Cargo.toml",
+    "README.md",
+    "src/**/*.rs",
+    "examples/**/*.rs",
+]
+
+[features]
+default = ["layer-shell", "mouse", "keyboard"]
+layer-shell = ["dep:smithay-client-toolkit"]
+recording = []
+mouse = []
+keyboard = []
+
+[dependencies]
+bitcode = "0.6.5"
+input = "0.9.1"
+libc = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+smithay-client-toolkit = { version = "0.20.0", optional = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+env_logger = { workspace = true }

@@ -1,20 +1,15 @@
 use std::{
-    collections::HashMap,
     os::fd::AsRawFd,
-    os::fd::OwnedFd,
-    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc::Receiver,
     },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
-use crate::shared::mouse_ring::RingBuffer;
-use crate::wayland::{
-    mouse_tracker::MouseTrackerLibinput,
-    types::{MouseTrackRecordingInfo, MouseTracker},
-};
+use crate::{GaylandEvent, runtime::GaylandController};
 use log::{info, warn};
 use smithay_client_toolkit::{
     compositor::{self, CompositorHandler},
@@ -48,28 +43,50 @@ pub enum WaylandError {
     CompositorBindingFailed,
     #[error("Failed to bind layer shell")]
     LayerShellBindingFailed,
+    #[error("Failed to start gayland runtime: {0}")]
+    RuntimeStartFailed(String),
+    #[error("Layer shell thread failed to start: {0}")]
+    ThreadStartFailed(String),
 }
 
 #[derive(Clone)]
-pub struct TrackingControl {
+pub(crate) struct LayerShellControl {
     pub stop_requested: Arc<AtomicBool>,
     pub paused: Arc<AtomicBool>,
 }
 
-impl TrackingControl {
-    pub fn new(stop_requested: Arc<AtomicBool>, paused: Arc<AtomicBool>) -> Self {
-        Self {
-            stop_requested,
-            paused,
-        }
-    }
-
+impl LayerShellControl {
     pub fn idle() -> Self {
         Self {
             stop_requested: Arc::new(AtomicBool::new(false)),
             paused: Arc::new(AtomicBool::new(false)),
         }
     }
+}
+
+/// Configuration for the layer-shell anchor helper.
+///
+/// This starts a transparent overlay surface, uses pointer focus to establish an
+/// absolute cursor anchor, and feeds that anchor into the libinput runtime.
+pub struct LayerShellConfig {
+    pub namespace: String,
+    pub sync_frequency_hz: f64,
+}
+
+impl Default for LayerShellConfig {
+    fn default() -> Self {
+        Self {
+            namespace: "gayland".to_string(),
+            sync_frequency_hz: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct CursorSample {
+    anchored: bool,
+    x: f64,
+    y: f64,
 }
 
 pub struct WaylandState {
@@ -89,7 +106,8 @@ pub struct WaylandState {
     cursor_y: f64,
 
     pointer: Option<WlPointer>,
-    mouse_tracker: MouseTrackerLibinput,
+    runtime: GaylandController,
+    current_sample: CursorSample,
     waiting_for_anchor: bool,
     resync_probe_mode: bool,
     last_anchor_at: Option<Instant>,
@@ -98,23 +116,42 @@ pub struct WaylandState {
     stop_capture: bool,
 }
 
-pub fn init_wayland(
+pub(crate) fn spawn_layer_shell(
+    config: LayerShellConfig,
+    control: LayerShellControl,
+    runtime: GaylandController,
+    runtime_events: Receiver<GaylandEvent>,
+) -> Result<JoinHandle<Result<(), WaylandError>>, WaylandError> {
+    thread::Builder::new()
+        .name("gayland-layer-shell".to_string())
+        .spawn(move || {
+            run_layer_shell_loop(LayerShellRun {
+                namespace: config.namespace,
+                sync_frequency_hz: config.sync_frequency_hz,
+                control,
+                runtime,
+                runtime_events,
+            })
+        })
+        .map_err(|e| WaylandError::ThreadStartFailed(e.to_string()))
+}
+
+struct LayerShellRun {
+    namespace: String,
     sync_frequency_hz: f64,
-    file_path: &std::path::PathBuf,
-    control: TrackingControl,
-    recording: MouseTrackRecordingInfo,
-    ring: Option<Arc<RingBuffer>>,
-    input_fds: Option<HashMap<PathBuf, OwnedFd>>,
-) -> Result<(), WaylandError> {
-    info!("Initializing Wayland connection and event loop");
-    info!(
-        "Mouse tracking output file: {}",
-        file_path.to_string_lossy()
-    );
-    // Start libinput tracker first so we can replay deltas after first absolute anchor.
-    let mouse_tracker =
-        MouseTrackerLibinput::start_with_input_fds(file_path, recording, ring, input_fds)
-            .map_err(|_| WaylandError::ConnectionFailed)?;
+    control: LayerShellControl,
+    runtime: GaylandController,
+    runtime_events: Receiver<GaylandEvent>,
+}
+
+fn run_layer_shell_loop(run: LayerShellRun) -> Result<(), WaylandError> {
+    let LayerShellRun {
+        namespace,
+        sync_frequency_hz,
+        control,
+        runtime,
+        runtime_events,
+    } = run;
 
     let conn = Connection::connect_to_env().map_err(|_| WaylandError::ConnectionFailed)?;
     let (globals, mut event_queue) =
@@ -126,17 +163,14 @@ pub fn init_wayland(
         LayerShell::bind(&globals, &qh).map_err(|_| WaylandError::LayerShellBindingFailed)?;
     let shm = Shm::bind(&globals, &qh).map_err(|_| WaylandError::LayerShellBindingFailed)?;
     let surface = compositor.create_surface(&qh);
-    // let region = compositor.wl_compositor().create_region(&qh, ());
-    // surface.set_input_region(Some(&region));
-    // region.destroy();
-    // surface.commit();
     let layer =
-        layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some("openstudio"), None);
+        layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some(namespace), None);
     layer.set_anchor(Anchor::all());
     layer.set_size(0, 0);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     layer.commit();
     let pool = SlotPool::new(4, &shm).unwrap();
+
     let mut state = WaylandState {
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
@@ -150,7 +184,8 @@ pub fn init_wayland(
         cursor_x: 0.0,
         cursor_y: 0.0,
         pointer: None,
-        mouse_tracker,
+        runtime,
+        current_sample: CursorSample::default(),
         waiting_for_anchor: true,
         resync_probe_mode: false,
         last_anchor_at: None,
@@ -162,20 +197,37 @@ pub fn init_wayland(
         resync_deadline: None,
         stop_capture: false,
     };
+
+    let mut last_paused = false;
     loop {
         if control.stop_requested.load(Ordering::Relaxed) {
             info!("Mouse tracking stop requested");
             break;
         }
-        state
-            .mouse_tracker
-            .set_paused(control.paused.load(Ordering::Relaxed));
+
+        let paused = control.paused.load(Ordering::Relaxed);
+        if paused != last_paused {
+            if paused {
+                state.runtime.pause();
+            } else {
+                state.runtime.resume();
+            }
+            last_paused = paused;
+        }
+
+        // todo: don't depend on waiting for events, use the last cached sample if available and only block on the event queue when idle
+        while let Ok(event) = runtime_events.try_recv() {
+            if let GaylandEvent::MousePosition { x, y, anchored, .. } = event {
+                state.current_sample = CursorSample { anchored, x, y };
+            }
+        }
 
         if let (Some(period), Some(last_anchor_at)) = (state.resync_period, state.last_anchor_at)
             && !state.waiting_for_anchor
             && last_anchor_at.elapsed() >= period
         {
             state.waiting_for_anchor = true;
+            state.runtime.clear_anchor();
             state.resync_probe_mode = true;
             state.resync_deadline = Some(Instant::now() + Duration::from_millis(50));
             state.set_input_region_probe(&qh);
@@ -203,7 +255,6 @@ pub fn init_wayland(
         let _ = event_queue.dispatch_pending(&mut state);
         let _ = event_queue.flush();
 
-        // Read new Wayland events with bounded wait so periodic resync still runs.
         if let Some(read_guard) = event_queue.prepare_read() {
             let timeout_ms = if state.waiting_for_anchor {
                 10
@@ -233,10 +284,8 @@ pub fn init_wayland(
         }
     }
 
-    info!(
-        "Mouse tracking event loop exiting, data written to {}",
-        file_path.to_string_lossy()
-    );
+    state.runtime.stop();
+    info!("Layer-shell tracking event loop exiting");
     Ok(())
 }
 
@@ -299,10 +348,8 @@ impl PointerHandler for WaylandState {
             self.cursor_x = event.position.0;
             self.cursor_y = event.position.1;
             if self.waiting_for_anchor {
-                // First absolute point from layer-surface pointer focus.
                 let now = Instant::now();
-                self.mouse_tracker
-                    .anchor_absolute(self.cursor_x, self.cursor_y, now);
+                self.runtime.set_anchor(self.cursor_x, self.cursor_y);
                 self.waiting_for_anchor = false;
                 self.resync_probe_mode = false;
                 self.resync_deadline = None;
@@ -344,7 +391,7 @@ impl LayerShellHandler for WaylandState {
         info!("Layer surface configured with serial {}", serial);
         self.width = configure.new_size.0;
         self.height = configure.new_size.1;
-        self.mouse_tracker
+        self.runtime
             .set_bounds(self.width as f64 - 1f64, self.height as f64 - 1f64);
         self.draw(qh);
         if self.waiting_for_anchor {
@@ -454,7 +501,6 @@ impl WaylandState {
 
     fn set_input_region_clickthrough(&self, qh: &QueueHandle<Self>) {
         let region = self.compositor_state.wl_compositor().create_region(qh, ());
-        // Empty input region => click-through.
         self.layer_surface
             .wl_surface()
             .set_input_region(Some(&region));
@@ -464,7 +510,7 @@ impl WaylandState {
 
     fn set_input_region_probe(&self, qh: &QueueHandle<Self>) {
         let region = self.compositor_state.wl_compositor().create_region(qh, ());
-        let sample = self.mouse_tracker.sample();
+        let sample = self.current_sample;
         let box_size = 512_i32;
         let half = box_size / 2;
         let max_x = self.width.saturating_sub(1) as i32;
@@ -498,38 +544,38 @@ impl WaylandState {
             )
             .expect("create buffer");
 
-        // Fill buffer (transparent pixels)
         for chunk in canvas.chunks_exact_mut(4) {
             chunk.copy_from_slice(&[0, 0, 0, 0]);
         }
 
-        // Mark the whole surface as damaged
         self.layer_surface
             .wl_surface()
             .damage_buffer(0, 0, width as i32, height as i32);
 
-        // Request next frame (optional but common)
         self.layer_surface
             .wl_surface()
             .frame(qh, self.layer_surface.wl_surface().clone());
 
-        // Attach buffer and commit
         buffer
             .attach_to(self.layer_surface.wl_surface())
             .expect("buffer attach");
 
         self.layer_surface.commit();
 
-        let mut sample = self.mouse_tracker.sample();
-        if sample.anchored && self.width > 0 && self.height > 0 {
-            // Keep reported cursor bounded to layer logical size.
+        let mut sample = self.current_sample;
+        if self.width > 0 && self.height > 0 {
             sample.x = sample.x.clamp(0.0, self.width as f64);
             sample.y = sample.y.clamp(0.0, self.height as f64);
         }
-        if sample.anchored {
+        if !self.waiting_for_anchor {
             info!(
-                "Mouse tracker sample: ({:.2}, {:.2}) waiting_for_anchor={} size={}x{}",
-                sample.x, sample.y, self.waiting_for_anchor, self.width, self.height
+                "Mouse tracker sample: ({:.2}, {:.2}) anchored_edge={} waiting_for_anchor={} size={}x{}",
+                sample.x,
+                sample.y,
+                sample.anchored,
+                self.waiting_for_anchor,
+                self.width,
+                self.height
             );
         } else {
             warn!("Mouse tracker waiting for absolute anchor from layer pointer event");

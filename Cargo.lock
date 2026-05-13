@@ -1486,6 +1486,7 @@ dependencies = [
  "env_logger",
  "eyre",
  "fastrand",
+ "gayland",
  "gbm",
  "gl",
  "glow",
@@ -1645,6 +1646,20 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gayland"
+version = "0.1.2"
+dependencies = [
+ "bitcode",
+ "env_logger",
+ "input",
+ "libc",
+ "log",
+ "serde",
+ "smithay-client-toolkit 0.20.0",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

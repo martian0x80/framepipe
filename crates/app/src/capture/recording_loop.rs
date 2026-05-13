@@ -17,8 +17,7 @@ use crate::drm_kms::{
     types::{CaptureOptions, CaptureOutput, LiveSettings},
 };
 use crate::shared::mouse_ring::RingBuffer;
-use crate::wayland::layer::{TrackingControl, init_wayland};
-use crate::wayland::types::MouseTrackRecordingInfo;
+use crate::wayland::runtime::{MouseTrackRecordingInfo, TrackingControl, init_wayland};
 use crate::{app::signals::CaptureControl, drm_kms::types::Profile, utils::types::ProcessState};
 
 use crate::drm_kms::egl_context::{
