@@ -86,6 +86,7 @@ pub enum Message {
     CursorSmearMaxStretchChanged(f32),
     CursorSmearMaxSquashChanged(f32),
 
+    #[allow(unused)]
     TogglePausePreview,
     TogglePauseRecording,
     GoToConfigurePage,

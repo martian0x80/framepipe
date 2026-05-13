@@ -1,3 +1,9 @@
+## [Unreleased]
+### Changed
+- Moved wayland tracking to separate crate and published as `gayland`.
+- Update gui size for proper dialog scaling.
+- Add pages to gui for configuring capture and recording control.
+
 ## [0.1.2] - 2026-04-27
 ### Changed
 - Add tray icon support with KDE StatusNotifierItem (ksni).
