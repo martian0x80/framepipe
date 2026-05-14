@@ -6,49 +6,41 @@ use crate::app::{App, Message};
 use crate::model::UiPage;
 
 impl App {
-    fn nav_tab<'a>(
-        label: &'a str,
-        active: bool,
-        msg: Option<Message>,
-    ) -> Element<'a, Message> {
-        let label_widget = text(label)
-            .size(13)
-            .font(iced::Font {
-                weight: if active {
-                    iced::font::Weight::Bold
-                } else {
-                    iced::font::Weight::Normal
-                },
-                ..Default::default()
-            });
-
-        let btn = button(
-            container(label_widget).center_x(Length::Fill),
-        )
-        .width(Length::Fill)
-        .height(Length::Shrink)
-        .padding([6, 14])
-        .style(move |theme: &Theme, status| {
-            let palette = theme.extended_palette();
-            let mut style = if active {
-                let mut s = iced::widget::button::primary(theme, status);
-                s.background = Some(iced::Background::Color(palette.primary.strong.color));
-                s.text_color = Color::WHITE;
-                s
+    fn nav_tab<'a>(label: &'a str, active: bool, msg: Option<Message>) -> Element<'a, Message> {
+        let label_widget = text(label).size(13).font(iced::Font {
+            weight: if active {
+                iced::font::Weight::Bold
             } else {
-                let mut s = iced::widget::button::secondary(theme, status);
-                s.background = Some(iced::Background::Color(Color::TRANSPARENT));
-                s.text_color = Color::from_rgba(
-                    palette.background.base.text.r,
-                    palette.background.base.text.g,
-                    palette.background.base.text.b,
-                    0.55,
-                );
-                s
-            };
-            style.border.radius = 8.0.into();
-            style
+                iced::font::Weight::Normal
+            },
+            ..Default::default()
         });
+
+        let btn = button(container(label_widget).center_x(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Shrink)
+            .padding([6, 14])
+            .style(move |theme: &Theme, status| {
+                let palette = theme.extended_palette();
+                let mut style = if active {
+                    let mut s = iced::widget::button::primary(theme, status);
+                    s.background = Some(iced::Background::Color(palette.primary.strong.color));
+                    s.text_color = Color::WHITE;
+                    s
+                } else {
+                    let mut s = iced::widget::button::secondary(theme, status);
+                    s.background = Some(iced::Background::Color(Color::TRANSPARENT));
+                    s.text_color = Color::from_rgba(
+                        palette.background.base.text.r,
+                        palette.background.base.text.g,
+                        palette.background.base.text.b,
+                        0.55,
+                    );
+                    s
+                };
+                style.border.radius = 8.0.into();
+                style
+            });
 
         if let Some(m) = msg {
             btn.on_press(m).into()
@@ -153,39 +145,30 @@ impl App {
     fn preview_panel(&self) -> Element<'_, Message> {
         if matches!(self.mode, crate::model::AppMode::Recording) {
             return stack![
-                image::Image::new(
-                    self.background_cache
-                        .as_ref()
-                        .unwrap_or(&iced::widget::image::Handle::from_path(
-                            "assets/grainy_bg.png"
-                        ))
-                )
+                image::Image::new(self.background_cache.as_ref().unwrap_or(
+                    &iced::widget::image::Handle::from_path("assets/grainy_bg.png")
+                ))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .content_fit(iced::ContentFit::Cover),
                 container(
                     column![
-                        container(
-                            text("REC")
-                                .size(14)
-                                .color(Color::WHITE)
-                                .font(iced::Font {
-                                    weight: iced::font::Weight::Bold,
-                                    ..Default::default()
-                                })
-                        )
+                        container(text("REC").size(14).color(Color::WHITE).font(iced::Font {
+                            weight: iced::font::Weight::Bold,
+                            ..Default::default()
+                        }))
                         .padding([4, 12])
-                        .style(|_: &Theme| iced::widget::container::Style {
-                            background: Some(Color::from_rgb(0.85, 0.15, 0.15).into()),
-                            border: iced::border::rounded(6),
+                        .style(|_: &Theme| {
+                            iced::widget::container::Style {
+                                background: Some(Color::from_rgb(0.85, 0.15, 0.15).into()),
+                                border: iced::border::rounded(6),
+                                ..Default::default()
+                            }
+                        }),
+                        text(self.recording_elapsed()).size(40).font(iced::Font {
+                            weight: iced::font::Weight::Bold,
                             ..Default::default()
                         }),
-                        text(self.recording_elapsed())
-                            .size(40)
-                            .font(iced::Font {
-                                weight: iced::font::Weight::Bold,
-                                ..Default::default()
-                            }),
                         text("Preview disabled while recording")
                             .size(13)
                             .color(Color::from_rgb(0.6, 0.6, 0.6)),
@@ -208,13 +191,9 @@ impl App {
 
         if !matches!(self.mode, crate::model::AppMode::Preview) {
             return stack![
-                image::Image::new(
-                    self.background_cache
-                        .as_ref()
-                        .unwrap_or(&iced::widget::image::Handle::from_path(
-                            "assets/grainy_bg.png"
-                        ))
-                )
+                image::Image::new(self.background_cache.as_ref().unwrap_or(
+                    &iced::widget::image::Handle::from_path("assets/grainy_bg.png")
+                ))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .content_fit(iced::ContentFit::Cover)
@@ -231,22 +210,20 @@ impl App {
                                 })
                         )
                         .padding([8, 16])
-                        .style(|_: &Theme| iced::widget::container::Style {
-                            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.55).into()),
-                            border: iced::border::rounded(8),
-                            ..Default::default()
+                        .style(|_: &Theme| {
+                            iced::widget::container::Style {
+                                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.55).into()),
+                                border: iced::border::rounded(8),
+                                ..Default::default()
+                            }
                         }),
                         text("Start preview to inspect settings live")
                             .size(12)
                             .color(Color::from_rgb(0.55, 0.55, 0.55)),
-                        button(
-                            text("Enable Preview")
-                                .size(13)
-                                .font(iced::Font {
-                                    weight: iced::font::Weight::Bold,
-                                    ..Default::default()
-                                })
-                        )
+                        button(text("Enable Preview").size(13).font(iced::Font {
+                            weight: iced::font::Weight::Bold,
+                            ..Default::default()
+                        }))
                         .padding([6, 16])
                         .style(|theme: &Theme, status| {
                             let mut s = iced::widget::button::success(theme, status);
@@ -296,12 +273,10 @@ impl App {
                     }),
                 container(
                     column![
-                        text("Preview Running")
-                            .size(18)
-                            .font(iced::Font {
-                                weight: iced::font::Weight::Bold,
-                                ..Default::default()
-                            }),
+                        text("Preview Running").size(18).font(iced::Font {
+                            weight: iced::font::Weight::Bold,
+                            ..Default::default()
+                        }),
                         text("Waiting for first frame…")
                             .size(12)
                             .color(Color::from_rgb(0.55, 0.55, 0.55)),
@@ -336,22 +311,24 @@ impl App {
             .into();
         }
 
-        container(text("Preview unavailable").size(13).color(Color::from_rgb(0.5, 0.5, 0.5)))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .style(iced::widget::container::rounded_box)
-            .into()
+        container(
+            text("Preview unavailable")
+                .size(13)
+                .color(Color::from_rgb(0.5, 0.5, 0.5)),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(iced::widget::container::rounded_box)
+        .into()
     }
 
     fn header_bar(&self) -> Element<'_, Message> {
-        let title = text("Framepipe")
-            .size(22)
-            .font(iced::Font {
-                weight: iced::font::Weight::Bold,
-                ..Default::default()
-            });
+        let title = text("Framepipe").size(22).font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..Default::default()
+        });
 
         let status = text(&self.status)
             .size(12)
@@ -363,15 +340,10 @@ impl App {
                 crate::model::AppMode::Preview => ("LIVE", Color::from_rgb(0.15, 0.6, 0.35)),
                 crate::model::AppMode::Recording => ("REC", Color::from_rgb(0.85, 0.15, 0.15)),
             };
-            container(
-                text(label)
-                    .size(10)
-                    .color(Color::WHITE)
-                    .font(iced::Font {
-                        weight: iced::font::Weight::Bold,
-                        ..Default::default()
-                    }),
-            )
+            container(text(label).size(10).color(Color::WHITE).font(iced::Font {
+                weight: iced::font::Weight::Bold,
+                ..Default::default()
+            }))
             .padding([2, 8])
             .style(move |_: &Theme| iced::widget::container::Style {
                 background: Some(color.into()),

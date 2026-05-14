@@ -1248,9 +1248,7 @@ impl GstEncoder {
             .map(|p| now.duration_since(p).as_nanos() as u64)
             .unwrap_or(0);
 
-        self.recording_started.elapsed().as_nanos() as u64
-            - self.paused_total_ns
-            - paused_now
+        self.recording_started.elapsed().as_nanos() as u64 - self.paused_total_ns - paused_now
     }
 
     pub fn push_frame(&mut self, ex: &ExportedDmabuf) -> Result<(), EncodeError> {
@@ -1290,7 +1288,11 @@ impl GstEncoder {
 
         if let Some(last) = self.last_pts_ns {
             let delta_ms = (pts_ns.saturating_sub(last)) as f64 / 1_000_000.0;
-            log::trace!("push_frame pts={}ms delta={}ms", pts_ns / 1_000_000, delta_ms);
+            log::trace!(
+                "push_frame pts={}ms delta={}ms",
+                pts_ns / 1_000_000,
+                delta_ms
+            );
         } else {
             log::trace!("push_frame pts={}ms first", pts_ns / 1_000_000);
         }

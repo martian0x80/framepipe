@@ -658,7 +658,6 @@ impl App {
                 Task::none()
             }
 
-
             Message::SourceChanged(v) => {
                 self.fixed.source = v;
                 self.mark_fixed_changed();

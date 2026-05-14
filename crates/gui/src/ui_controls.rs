@@ -12,12 +12,10 @@ use iced::{Alignment, Color, Element, Length, Theme};
 
 impl App {
     fn section_heading(title: &str) -> iced::widget::Text<'_> {
-        text(title)
-            .size(20)
-            .font(iced::Font {
-                weight: iced::font::Weight::Bold,
-                ..Default::default()
-            })
+        text(title).size(20).font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..Default::default()
+        })
     }
 
     fn subsection_label(title: &str) -> iced::widget::Text<'_> {
@@ -282,8 +280,7 @@ impl App {
                             text("Wayland sync"),
                             text_input("0.5", &self.fixed.wayland_sync_frequency)
                                 .on_input_maybe(
-                                    (!disabled)
-                                        .then_some(Message::WaylandSyncFrequencyEdited)
+                                    (!disabled).then_some(Message::WaylandSyncFrequencyEdited)
                                 )
                                 .width(Length::Fixed(80.0)),
                             text("Hz").size(12).color(Color::from_rgb(0.5, 0.5, 0.5)),
@@ -353,14 +350,10 @@ impl App {
         let action_card = Self::card(if recording {
             column![
                 button(
-                    container(
-                        text("Stop Recording")
-                            .size(22)
-                            .font(iced::Font {
-                                weight: iced::font::Weight::Bold,
-                                ..Default::default()
-                            }),
-                    )
+                    container(text("Stop Recording").size(22).font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..Default::default()
+                    }),)
                     .center_x(Length::Fill),
                 )
                 .padding([14, 18])
@@ -399,14 +392,10 @@ impl App {
         } else {
             column![
                 button(
-                    container(
-                        text("Start Recording")
-                            .size(24)
-                            .font(iced::Font {
-                                weight: iced::font::Weight::Bold,
-                                ..Default::default()
-                            }),
-                    )
+                    container(text("Start Recording").size(24).font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..Default::default()
+                    }),)
                     .center_x(Length::Fill),
                 )
                 .padding([16, 20])
@@ -458,9 +447,7 @@ impl App {
                 .align_y(Alignment::Center),
                 toggler(self.fixed.allow_fallback_connector)
                     .label("Allow fallback connector")
-                    .on_toggle_maybe(
-                        (!disabled).then_some(Message::AllowFallbackConnectorToggled)
-                    ),
+                    .on_toggle_maybe((!disabled).then_some(Message::AllowFallbackConnectorToggled)),
                 row![
                     text("Output WxH"),
                     text_input("auto", &self.fixed.output_width)
@@ -538,8 +525,7 @@ impl App {
                     text("Dump dir"),
                     container(text(Self::short_path(Some(&self.fixed.dump_dir))).size(13))
                         .width(Length::Fill),
-                    App::btn("Browse")
-                        .on_press_maybe((!disabled).then_some(Message::PickDumpDir)),
+                    App::btn("Browse").on_press_maybe((!disabled).then_some(Message::PickDumpDir)),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
