@@ -11,7 +11,7 @@ Rather than waiting for upstream solutions, we focus on delivering working imple
 
 Framepipe now includes a Iced-based GUI for configuration and preview, but it can also be used as a CLI tool for recording without the GUI.
 
-<img width="2880" height="1800" alt="1776963398586833818(1)" src="https://github.com/user-attachments/assets/526ea792-d42c-4fb3-9e93-c21e75848508" />
+<img width="1920" height="1440" alt="144_1x_shots_so" src="https://github.com/user-attachments/assets/2efad40a-8089-46e9-b46c-8106b9dd7a98" />
 
 Two capture backends are available: DRM/KMS and XDG Portal (PipeWire). The former is more stable and convenient but requires some capabilities (`setcap`) to be set, pipewire support is almost stable as well, but requires extra work.
 
