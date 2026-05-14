@@ -123,6 +123,8 @@ pub struct App {
     record_thread: Option<std::thread::JoinHandle<Result<(), String>>>,
     preview_control: Option<framepipe::app::signals::CaptureControl>,
     paused: bool,
+    total_paused_duration: std::time::Duration,
+    pause_start: Option<Instant>,
     ui_tick: u64,
     tray_rx: Option<mpsc::Receiver<TrayCommand>>,
     tray: Option<TrayController>,
@@ -169,6 +171,8 @@ impl App {
             record_thread: None,
             preview_control: None,
             paused: false,
+            total_paused_duration: std::time::Duration::ZERO,
+            pause_start: None,
             ui_tick: 0,
             tray_rx: None,
             tray: None,
@@ -342,7 +346,12 @@ impl App {
 
     fn recording_elapsed(&self) -> String {
         if let Some(start) = self.record_started_at {
-            let secs = start.elapsed().as_secs();
+            let mut duration = start.elapsed();
+            if let Some(ps) = self.pause_start {
+                duration = duration.saturating_sub(ps.elapsed());
+            }
+            duration = duration.saturating_sub(self.total_paused_duration);
+            let secs = duration.as_secs();
             let h = secs / 3600;
             let m = (secs % 3600) / 60;
             let s = secs % 60;
@@ -406,6 +415,8 @@ impl App {
             self.record_started_at = None;
             self.record_control = None;
             self.paused = false;
+            self.total_paused_duration = std::time::Duration::ZERO;
+            self.pause_start = None;
             self.mode = AppMode::Idle;
             match result {
                 Ok(()) => {
@@ -595,6 +606,8 @@ impl App {
                     Ok(options) => {
                         self.mode = AppMode::Recording;
                         self.record_started_at = Some(Instant::now());
+                        self.total_paused_duration = std::time::Duration::ZERO;
+                        self.pause_start = None;
                         self.status = format!("Recording to {}", output.display());
                         self.record_control = Some(control.clone());
                         self.record_thread = Some(std::thread::spawn(move || {
@@ -966,6 +979,9 @@ impl App {
                         ctrl.paused
                             .store(false, std::sync::atomic::Ordering::Relaxed);
                         self.paused = false;
+                        if let Some(ps) = self.pause_start.take() {
+                            self.total_paused_duration += ps.elapsed();
+                        }
                         self.status = format!(
                             "Recording to {}",
                             self.fixed
@@ -979,6 +995,7 @@ impl App {
                         ctrl.paused
                             .store(true, std::sync::atomic::Ordering::Relaxed);
                         self.paused = true;
+                        self.pause_start = Some(Instant::now());
                         self.status = "Recording paused".to_string();
                     }
                 }

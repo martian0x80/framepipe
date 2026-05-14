@@ -429,14 +429,24 @@ pub fn run_capture_session(
             control.paused.store(true, Ordering::Relaxed);
             let _ = backend.send_notification(ProcessState::Paused, 2);
             log::info!("Recording paused (SIGUSR1)");
+            if let Some(enc) = encoder.as_mut() {
+                enc.pause();
+            }
         }
         if control.resume_req.swap(false, Ordering::Relaxed) {
             control.paused.store(false, Ordering::Relaxed);
             log::info!("Recording resumed (SIGUSR2)");
             if let Some(enc) = encoder.as_mut() {
+                enc.resume();
                 enc.request_keyframe("resume");
             }
             last_forced_keyframe_frame = frame_idx;
+
+            // Prevent frame catch-up backlog burst
+            // without this the loop will not sleep since deadline is in the past
+            // and the next iteration will calculate "too late" and grind the CPU
+            // to catch up
+            next_deadline = Instant::now() + frame_period;
         }
         if control.paused.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(100));

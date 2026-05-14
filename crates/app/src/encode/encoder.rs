@@ -37,7 +37,12 @@ pub struct GstEncoder {
     options: EncoderOptions,
     frame_ns: u64,
     next_pts_ns: u64,
-    start: Instant,
+    paused: bool,
+    recording_started: Instant,
+    pause_started: Option<Instant>,
+    paused_total_ns: u64,
+    last_pts_ns: Option<u64>,
+    last_push_wall: Option<Instant>,
 }
 
 pub enum EncoderOutput<'a> {
@@ -353,7 +358,10 @@ fn set_appsrc_caps(
 ) -> Result<(), String> {
     let drm = fourcc_to_drm_format(ex.fourcc);
     let raw = fourcc_to_raw_format(ex.fourcc);
-    let fps = opts.fps.max(1);
+    let fps_fraction = match opts.frame_rate_mode {
+        FrameRateMode::Cfr => format!("{}/1", opts.fps.max(1)),
+        FrameRateMode::Vfr => "0/1".to_string(),
+    };
     let range = &opts.color_range.to_string();
     let colorimetry = opts.colorimetry.to_string();
     let transfer_suffix = transfer_for_profile(opts.profile)
@@ -366,11 +374,11 @@ fn set_appsrc_caps(
         && let Some(raw) = raw
     {
         let raw_fallback = format!(
-            "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
+            "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){},color-range=(string){},colorimetry=(string){}{}",
             raw,
             ex.width,
             ex.height,
-            fps,
+            fps_fraction,
             range,
             colorimetry.as_str(),
             transfer_suffix.as_str()
@@ -385,11 +393,11 @@ fn set_appsrc_caps(
     if let Some(drm) = drm {
         let drm_with_mod = format!("{drm}:0x{:016x}", ex.modifier);
         let full_with_mod = format!(
-            "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
+            "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){},color-range=(string){},colorimetry=(string){}{}",
             drm_with_mod,
             ex.width,
             ex.height,
-            fps,
+            fps_fraction,
             range,
             colorimetry.as_str(),
             transfer_suffix.as_str()
@@ -406,11 +414,11 @@ fn set_appsrc_caps(
         }
 
         let full = format!(
-            "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
+            "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){},color-range=(string){},colorimetry=(string){}{}",
             drm,
             ex.width,
             ex.height,
-            fps,
+            fps_fraction,
             range,
             colorimetry.as_str(),
             transfer_suffix.as_str()
@@ -429,11 +437,11 @@ fn set_appsrc_caps(
 
     if let Some(raw) = raw {
         let dmabuf_raw = format!(
-            "video/x-raw(memory:DMABuf),format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
+            "video/x-raw(memory:DMABuf),format=(string){},width=(int){},height=(int){},framerate=(fraction){},color-range=(string){},colorimetry=(string){}{}",
             raw,
             ex.width,
             ex.height,
-            fps,
+            fps_fraction,
             range,
             colorimetry.as_str(),
             transfer_suffix.as_str()
@@ -445,11 +453,11 @@ fn set_appsrc_caps(
         }
 
         let raw_fallback = format!(
-            "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){}/1,color-range=(string){},colorimetry=(string){}{}",
+            "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){},color-range=(string){},colorimetry=(string){}{}",
             raw,
             ex.width,
             ex.height,
-            fps,
+            fps_fraction,
             range,
             colorimetry.as_str(),
             transfer_suffix.as_str()
@@ -792,6 +800,14 @@ impl GstEncoder {
         }
         options.bitrate_mode = selected_mode;
         let fps = options.fps.max(1);
+        let fps_fraction = match options.frame_rate_mode {
+            FrameRateMode::Cfr => format!("{fps}/1"),
+            FrameRateMode::Vfr => "0/1".to_string(),
+        };
+        let videorate = match options.frame_rate_mode {
+            FrameRateMode::Cfr => "! videorate ",
+            FrameRateMode::Vfr => "",
+        };
         let auto_floor = auto_bitrate_floor_kbps(ex.width, ex.height, fps, &options.bitrate_mode);
         let requested = options.bitrate_kbps.max(1);
         let bitrate = requested.max(auto_floor).max(1);
@@ -947,7 +963,7 @@ impl GstEncoder {
                 format!(
                     concat!(
                         "! vapostproc ",
-                        "! video/x-raw(memory:VAMemory),format={fmt},width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
+                        "! video/x-raw(memory:VAMemory),format={fmt},width={w},height={h},framerate={fps_fraction},color-range=(string){range},colorimetry=(string){colorimetry} ",
                         "! {enc} name=enc {vaapi_props} ",
                         "{profile_caps}",
                         "! {parser} "
@@ -955,7 +971,7 @@ impl GstEncoder {
                     fmt = encoder_input_format,
                     w = w,
                     h = h,
-                    fps = fps,
+                    fps_fraction = fps_fraction,
                     range = range,
                     colorimetry = colorimetry,
                     enc = enc,
@@ -1018,7 +1034,7 @@ impl GstEncoder {
                 format!(
                     concat!(
                         "! vapostproc ",
-                        "! video/x-raw(memory:VAMemory),format={fmt},width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
+                        "! video/x-raw(memory:VAMemory),format={fmt},width={w},height={h},framerate={fps_fraction},color-range=(string){range},colorimetry=(string){colorimetry} ",
                         "! {enc} name=enc {qsv_props} ",
                         "{profile_caps}",
                         "! {parser} "
@@ -1026,7 +1042,7 @@ impl GstEncoder {
                     fmt = encoder_input_format,
                     w = w,
                     h = h,
-                    fps = fps,
+                    fps_fraction = fps_fraction,
                     range = range,
                     colorimetry = colorimetry,
                     enc = enc,
@@ -1044,13 +1060,13 @@ impl GstEncoder {
                     concat!(
                         "! vulkanupload ",
                         "! vulkancolorconvert ",
-                        "! video/x-raw(memory:VulkanImage),format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
+                        "! video/x-raw(memory:VulkanImage),format=NV12,width={w},height={h},framerate={fps_fraction},color-range=(string){range},colorimetry=(string){colorimetry} ",
                         "! {enc} name=enc rate-control={rc} bitrate={bitrate} quality=5 min-qp=1 max-qp=30 ",
                         "! {parser} "
                     ),
                     w = w,
                     h = h,
-                    fps = fps,
+                    fps_fraction = fps_fraction,
                     range = range,
                     colorimetry = colorimetry,
                     enc = enc,
@@ -1070,14 +1086,15 @@ impl GstEncoder {
                     VideoCodec::H264 => format!(
                         concat!(
                             "! videoconvert ",
-                            "! videorate ",
-                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
+                            "{videorate}",
+                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps_fraction},color-range=(string){range},colorimetry=(string){colorimetry} ",
                             "! {enc} name=enc bitrate={bitrate} pass={pass} speed-preset=veryfast tune=zerolatency key-int-max={gop} bframes=0 cabac=true rc-lookahead=0 sync-lookahead=0 threads=0 sliced-threads=true ",
                             "! h264parse "
                         ),
                         w = w,
                         h = h,
-                        fps = fps,
+                        fps_fraction = fps_fraction,
+                        videorate = videorate,
                         range = options.color_range.to_string(),
                         colorimetry = colorimetry,
                         enc = enc,
@@ -1088,14 +1105,15 @@ impl GstEncoder {
                     VideoCodec::H265 => format!(
                         concat!(
                             "! videoconvert ",
-                            "! videorate ",
-                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
+                            "{videorate}",
+                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps_fraction},color-range=(string){range},colorimetry=(string){colorimetry} ",
                             "! {enc} name=enc bitrate={bitrate} speed-preset=veryfast key-int-max={gop} ",
                             "! h265parse "
                         ),
                         w = w,
                         h = h,
-                        fps = fps,
+                        fps_fraction = fps_fraction,
+                        videorate = videorate,
                         range = options.color_range.to_string(),
                         colorimetry = colorimetry,
                         enc = enc,
@@ -1105,14 +1123,15 @@ impl GstEncoder {
                     VideoCodec::Av1 => format!(
                         concat!(
                             "! videoconvert ",
-                            "! videorate ",
-                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps}/1,color-range=(string){range},colorimetry=(string){colorimetry} ",
+                            "{videorate}",
+                            "! video/x-raw,format=NV12,width={w},height={h},framerate={fps_fraction},color-range=(string){range},colorimetry=(string){colorimetry} ",
                             "! {enc} name=enc bitrate={bitrate} speed-preset=veryfast tune=0 key-int-max={gop} bframes=0 rc-lookahead=0 sync-lookahead=0 threads=0 sliced-threads=true ",
                             "! av1parse "
                         ),
                         w = w,
                         h = h,
-                        fps = fps,
+                        fps_fraction = fps_fraction,
+                        videorate = videorate,
                         range = options.color_range.to_string(),
                         colorimetry = colorimetry,
                         enc = enc,
@@ -1170,6 +1189,9 @@ impl GstEncoder {
         appsrc.set_property("max-buffers", max_buffers);
         appsrc.set_property("max-time", 0u64);
         appsrc.set_block(true);
+        appsrc.set_is_live(true);
+        appsrc.set_do_timestamp(false);
+        appsrc.set_format(gst::Format::Time);
 
         pipeline
             .set_state(gst::State::Playing)
@@ -1202,7 +1224,12 @@ impl GstEncoder {
             options,
             frame_ns: 1_000_000_000u64 / fps as u64,
             next_pts_ns: 0,
-            start: Instant::now(),
+            paused: false,
+            recording_started: Instant::now(),
+            pause_started: None,
+            paused_total_ns: 0,
+            last_pts_ns: None,
+            last_push_wall: None,
         })
     }
 
@@ -1214,22 +1241,63 @@ impl GstEncoder {
         Self::new_with_output(EncoderOutput::File(out_path), ex, options)
     }
 
+    fn recording_elapsed_ns(&self) -> u64 {
+        let now = Instant::now();
+        let paused_now = self
+            .pause_started
+            .map(|p| now.duration_since(p).as_nanos() as u64)
+            .unwrap_or(0);
+
+        self.recording_started.elapsed().as_nanos() as u64
+            - self.paused_total_ns
+            - paused_now
+    }
+
     pub fn push_frame(&mut self, ex: &ExportedDmabuf) -> Result<(), EncodeError> {
-        let elapsed_ns = self.start.elapsed().as_nanos() as u64;
+        if self.paused {
+            return Ok(());
+        }
+
+        if matches!(self.options.frame_rate_mode, FrameRateMode::Cfr) {
+            let now = Instant::now();
+
+            if let Some(last) = self.last_push_wall {
+                let elapsed = now.duration_since(last).as_nanos() as u64;
+
+                // Drop frames that arrive much faster than target fps.
+                // Use 80% to allow jitter.
+                if elapsed < self.frame_ns * 8 / 10 {
+                    return Ok(());
+                }
+            }
+
+            self.last_push_wall = Some(now);
+        }
+
         let pts_ns = match self.options.frame_rate_mode {
             FrameRateMode::Cfr => {
-                let wall_time = (elapsed_ns / self.frame_ns).saturating_mul(self.frame_ns);
-                self.next_pts_ns.max(wall_time)
+                let pts = self.next_pts_ns;
+                self.next_pts_ns += self.frame_ns;
+                pts
             }
-            FrameRateMode::Vfr => elapsed_ns,
+            FrameRateMode::Vfr => self.recording_elapsed_ns(),
         };
-        let duration_ns = match self.options.frame_rate_mode {
+
+        let duration = match self.options.frame_rate_mode {
             FrameRateMode::Cfr => Some(self.frame_ns),
             FrameRateMode::Vfr => None,
         };
 
-        push_exported_dmabuf(&self.appsrc, ex, pts_ns, duration_ns)?;
-        self.next_pts_ns = pts_ns.saturating_add(self.frame_ns);
+        if let Some(last) = self.last_pts_ns {
+            let delta_ms = (pts_ns.saturating_sub(last)) as f64 / 1_000_000.0;
+            log::trace!("push_frame pts={}ms delta={}ms", pts_ns / 1_000_000, delta_ms);
+        } else {
+            log::trace!("push_frame pts={}ms first", pts_ns / 1_000_000);
+        }
+
+        push_exported_dmabuf(&self.appsrc, ex, pts_ns, duration)?;
+        self.last_pts_ns = Some(pts_ns);
+
         Ok(())
     }
 
@@ -1242,6 +1310,26 @@ impl GstEncoder {
             log::trace!("Requested force keyframe ({reason})");
         } else {
             log::warn!("Failed to request force keyframe ({reason})");
+        }
+    }
+
+    pub fn pause(&mut self) {
+        if !self.paused {
+            log::info!("Encoder pause");
+            self.paused = true;
+            self.pause_started = Some(Instant::now());
+        }
+    }
+
+    pub fn resume(&mut self) {
+        if self.paused {
+            log::info!("Encoder resume");
+            if let Some(p) = self.pause_started.take() {
+                self.paused_total_ns += p.elapsed().as_nanos() as u64;
+            }
+            self.paused = false;
+            self.last_push_wall = Some(Instant::now());
+            self.request_keyframe("resume");
         }
     }
 
