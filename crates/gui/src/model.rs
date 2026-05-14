@@ -18,6 +18,7 @@ pub enum AppMode {
 pub enum UiPage {
     Configure,
     Record,
+    Advanced,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

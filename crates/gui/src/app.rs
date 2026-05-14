@@ -24,7 +24,6 @@ pub enum Message {
     RestartPreview,
     StartRecording,
     StopRecording,
-    ToggleAdvanced,
 
     ThemeChanged(Theme),
 
@@ -91,6 +90,7 @@ pub enum Message {
     TogglePauseRecording,
     GoToConfigurePage,
     GoToRecordPage,
+    GoToAdvancedPage,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -107,7 +107,7 @@ pub struct App {
 
     fixed: FixedOptions,
     live: LiveSettings,
-    show_advanced: bool,
+
     fixed_dirty: bool,
 
     preview_session: Option<EmbeddedPreviewSession>,
@@ -155,7 +155,7 @@ impl App {
             status: "Idle. ".to_string(),
             fixed,
             live,
-            show_advanced: false,
+
             fixed_dirty: false,
             preview_session: None,
             preview_join_thread: None,
@@ -482,10 +482,10 @@ impl App {
             return;
         }
 
-        self.signal_control.reset();
+        let session_control = framepipe::app::signals::CaptureControl::new_unregistered();
         match framepipe::embedded_preview::start_embedded_preview_with_control(
             self.build_capture_args(),
-            self.signal_control.clone(),
+            session_control,
         ) {
             Ok(session) => {
                 let preview_mailbox = session.mailbox();
@@ -529,6 +529,21 @@ impl App {
                 self.poll_background_threads();
                 self.process_tray_commands();
                 self.sync_tray_state();
+
+                // Handle SIGINT/SIGTERM: gracefully shut down and exit the GUI.
+                if self
+                    .signal_control
+                    .stop_requested
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    log::info!("SIGINT/SIGTERM received, shutting down GUI");
+                    self.stop_preview_session();
+                    if let Some(control) = self.record_control.take() {
+                        control.request_stop();
+                    }
+                    return iced::exit();
+                }
+
                 Task::none()
             }
             Message::TogglePreview => {
@@ -567,8 +582,9 @@ impl App {
                     }
                 });
 
-                self.signal_control.reset();
-                let control = self.signal_control.clone();
+                let session_control = framepipe::app::signals::CaptureControl::new_unregistered();
+                let control = session_control.clone();
+
                 let args = self.build_capture_args();
                 let backend = args.capture_backend;
 
@@ -621,10 +637,14 @@ impl App {
                 self.page = UiPage::Record;
                 Task::none()
             }
-            Message::ToggleAdvanced => {
-                self.show_advanced = !self.show_advanced;
+            Message::GoToAdvancedPage => {
+                if matches!(self.mode, AppMode::Recording) {
+                    return Task::none();
+                }
+                self.page = UiPage::Advanced;
                 Task::none()
             }
+
 
             Message::SourceChanged(v) => {
                 self.fixed.source = v;
