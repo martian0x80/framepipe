@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
+use crate::app::hotkeys::HotkeyBinding;
 use crate::capture::types::CaptureBackendKind;
 use crate::drm_kms::types::{
     BitrateMode, ColorRange, Colorimetry, EncoderBackend, FrameRateMode, Profile, QualityPreset,
@@ -49,6 +50,18 @@ pub struct CaptureArgs {
     pub allow_fallback_connector: bool,
     #[arg(long, default_value_t = 60)]
     pub fps: u32,
+    #[arg(
+        long = "hotkey",
+        value_name = "ACTION=CHORD",
+        help = "Register a recording-time control hotkey, e.g. --hotkey toggle-pause=Ctrl+Shift+P, supported actions: toggle-pause, stop, resume, pause (can be specified multiple times)"
+    )]
+    pub hotkeys: Vec<HotkeyBinding>,
+    #[arg(
+        long = "disable-hotkeys",
+        default_value_t = false,
+        help = "Disable recording-time control hotkeys even when --hotkey is provided"
+    )]
+    pub disable_hotkeys: bool,
     #[arg(long)]
     pub output_width: Option<u32>,
     #[arg(long)]
@@ -233,6 +246,8 @@ impl Default for CaptureArgs {
             connector: None,
             allow_fallback_connector: false,
             fps: 60,
+            hotkeys: Vec::new(),
+            disable_hotkeys: false,
             output_width: None,
             output_height: None,
             dump_frames: false,

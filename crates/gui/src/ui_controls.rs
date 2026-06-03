@@ -551,6 +551,76 @@ impl App {
             .spacing(8),
         );
 
+        let hotkey_card = Self::card(
+            column![
+                Self::subsection_label("HOTKEYS"),
+                toggler(self.fixed.hotkeys_enabled)
+                    .label("Enable recording-time hotkeys")
+                    .on_toggle_maybe((!disabled).then_some(Message::HotkeysEnabledToggled)),
+                row![
+                    text("Stop"),
+                    text_input("Ctrl+Shift+Q", &self.fixed.hotkey_stop)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.hotkeys_enabled)
+                                .then_some(Message::HotkeyStopEdited),
+                        )
+                        .width(Length::Fill),
+                    App::btn("Save").on_press_maybe(
+                        (!disabled && self.fixed.hotkeys_enabled)
+                            .then_some(Message::ApplyHotkeyStop),
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
+                    text("Pause"),
+                    text_input("Ctrl+Shift+P", &self.fixed.hotkey_pause)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.hotkeys_enabled)
+                                .then_some(Message::HotkeyPauseEdited),
+                        )
+                        .width(Length::Fill),
+                    App::btn("Save").on_press_maybe(
+                        (!disabled && self.fixed.hotkeys_enabled)
+                            .then_some(Message::ApplyHotkeyPause),
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
+                    text("Resume"),
+                    text_input("Ctrl+Shift+R", &self.fixed.hotkey_resume)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.hotkeys_enabled)
+                                .then_some(Message::HotkeyResumeEdited),
+                        )
+                        .width(Length::Fill),
+                    App::btn("Save").on_press_maybe(
+                        (!disabled && self.fixed.hotkeys_enabled)
+                            .then_some(Message::ApplyHotkeyResume),
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
+                    text("Toggle"),
+                    text_input("Ctrl+Shift+Space", &self.fixed.hotkey_toggle_pause)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.hotkeys_enabled)
+                                .then_some(Message::HotkeyTogglePauseEdited),
+                        )
+                        .width(Length::Fill),
+                    App::btn("Save").on_press_maybe(
+                        (!disabled && self.fixed.hotkeys_enabled)
+                            .then_some(Message::ApplyHotkeyTogglePause),
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(8),
+        );
+
         // ── Cursor effects card (smooth) ─────────────────────────────────
         let smooth_card = Self::card({
             let mut col = column![
@@ -839,6 +909,7 @@ impl App {
             row![debug_card, theme_card,]
                 .spacing(10)
                 .width(Length::Fill),
+            hotkey_card,
             Self::inset_divider(),
             Self::section_heading("Live Effects"),
             row![smooth_card, smear_card,]

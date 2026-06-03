@@ -1,3 +1,4 @@
+use crate::app::hotkeys::HotkeyBinding;
 use arc_swap::ArcSwap;
 use drm::Device as BasicDevice;
 use drm::control::Device as ControlDevice;
@@ -234,6 +235,7 @@ pub struct CaptureOptions {
     pub encoder_backend: EncoderBackend,
     pub video_codec: VideoCodec,
     pub cursor_composition: bool,
+    pub hotkeys: Vec<HotkeyBinding>,
     pub cursor_sprite: Option<PathBuf>,
     pub cursor_hotspot_x: i32,
     pub cursor_hotspot_y: i32,

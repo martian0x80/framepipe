@@ -49,6 +49,11 @@ pub fn build_capture_options(
         encoder_backend: capture.encoder_backend,
         video_codec: capture.video_codec,
         cursor_composition: capture.cursor_composition,
+        hotkeys: if capture.disable_hotkeys {
+            Vec::new()
+        } else {
+            capture.hotkeys
+        },
         cursor_sprite: capture.cursor_sprite,
         cursor_hotspot_x: capture.cursor_hotspot_x,
         cursor_hotspot_y: capture.cursor_hotspot_y,

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -11,13 +12,13 @@ use input::event::Event;
 use input::event::keyboard::{KeyState, KeyboardEventTrait};
 use input::event::pointer::PointerEvent;
 use input::{Libinput, LibinputInterface};
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use crate::config::{GaylandConfig, HotkeySpec, InputSource};
 use crate::event::{GaylandEvent, StateEvent};
 use crate::keyboard::key_info;
 
-pub(crate) type EventSink = Box<dyn FnMut(&GaylandEvent) + Send + 'static>;
+type Subscribers = Arc<Mutex<Vec<Sender<GaylandEvent>>>>;
 
 #[derive(Default)]
 struct RuntimeState {
@@ -45,6 +46,7 @@ pub(crate) enum Command {
 
 pub struct GaylandHandle {
     controller: GaylandController,
+    subscribers: Subscribers,
     finished: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
@@ -89,8 +91,21 @@ impl GaylandController {
 }
 
 impl GaylandHandle {
+    pub fn start(config: GaylandConfig, source: InputSource) -> Result<Self, String> {
+        let (handle, _events) = start(config, source)?;
+        Ok(handle)
+    }
+
     pub fn controller(&self) -> GaylandController {
         self.controller.clone()
+    }
+
+    pub fn subscribe(&self) -> Receiver<GaylandEvent> {
+        let (tx, rx) = mpsc::channel();
+        if let Ok(mut subscribers) = self.subscribers.lock() {
+            subscribers.push(tx);
+        }
+        rx
     }
 
     pub fn pause(&self) {
@@ -207,16 +222,10 @@ pub fn start(
     config: GaylandConfig,
     source: InputSource,
 ) -> Result<(GaylandHandle, Receiver<GaylandEvent>), String> {
-    start_with_sink(config, source, None)
-}
-
-pub(crate) fn start_with_sink(
-    config: GaylandConfig,
-    source: InputSource,
-    mut event_sink: Option<EventSink>,
-) -> Result<(GaylandHandle, Receiver<GaylandEvent>), String> {
     let (event_tx, event_rx) = mpsc::channel();
     let (cmd_tx, cmd_rx) = mpsc::channel();
+    let subscribers = Arc::new(Mutex::new(vec![event_tx]));
+    let thread_subscribers = subscribers.clone();
     let finished = Arc::new(AtomicBool::new(false));
     let finished_clone = finished.clone();
 
@@ -243,12 +252,15 @@ pub(crate) fn start_with_sink(
             }
 
             info!(
-                "gayland runtime started: seat={} mouse={} keyboard={} batch_window={:?}",
-                config.seat, config.enable_mouse, config.enable_keyboard, config.batch_window
+                "gayland runtime started: seat={} mouse={} keyboard={} hotkeys={} batch_window={:?}",
+                config.seat,
+                config.enable_mouse,
+                config.enable_keyboard,
+                state.hotkeys.len(),
+                config.batch_window
             );
             emit_event(
-                &event_tx,
-                &mut event_sink,
+                &thread_subscribers,
                 GaylandEvent::State(StateEvent::Started),
             );
 
@@ -267,8 +279,7 @@ pub(crate) fn start_with_sink(
                         Command::Pause(p) => {
                             paused = p;
                             emit_event(
-                                &event_tx,
-                                &mut event_sink,
+                                &thread_subscribers,
                                 GaylandEvent::State(if p {
                                     StateEvent::Paused
                                 } else {
@@ -285,8 +296,7 @@ pub(crate) fn start_with_sink(
                             state.max_y = Some(height);
                             clamp_bounds(&mut state);
                             emit_event(
-                                &event_tx,
-                                &mut event_sink,
+                                &thread_subscribers,
                                 GaylandEvent::BoundsChanged {
                                     max_x: state.max_x,
                                     max_y: state.max_y,
@@ -301,8 +311,7 @@ pub(crate) fn start_with_sink(
                             state.anchor_epoch = state.anchor_epoch.wrapping_add(1);
                             clamp_bounds(&mut state);
                             emit_event(
-                                &event_tx,
-                                &mut event_sink,
+                                &thread_subscribers,
                                 GaylandEvent::AnchorChanged {
                                     x: state.x,
                                     y: state.y,
@@ -314,9 +323,14 @@ pub(crate) fn start_with_sink(
                             state.anchor_edge_pending = false;
                         }
                         Command::RegisterHotkey { id, spec } => {
+                            debug!(
+                                "gayland hotkey registered at runtime: id={id} keys={:?}",
+                                spec.keys
+                            );
                             state.hotkeys.insert(id, spec);
                         }
                         Command::UnregisterHotkey { id } => {
+                            debug!("gayland hotkey unregistered at runtime: id={id}");
                             state.hotkeys.remove(&id);
                             state.active_hotkeys.remove(&id);
                         }
@@ -336,8 +350,7 @@ pub(crate) fn start_with_sink(
                         let anchor_edge = state.anchor_edge_pending;
                         state.anchor_edge_pending = false;
                         emit_event(
-                            &event_tx,
-                            &mut event_sink,
+                            &thread_subscribers,
                             GaylandEvent::MousePosition {
                                 x: state.x,
                                 y: state.y,
@@ -388,8 +401,7 @@ pub(crate) fn start_with_sink(
                                     let t_ns =
                                         start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
                                     emit_event(
-                                        &event_tx,
-                                        &mut event_sink,
+                                        &thread_subscribers,
                                         GaylandEvent::MouseDelta { dx, dy, t_ns },
                                     );
                                 }
@@ -397,8 +409,7 @@ pub(crate) fn start_with_sink(
                                     let t_ns =
                                         start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
                                     emit_event(
-                                        &event_tx,
-                                        &mut event_sink,
+                                        &thread_subscribers,
                                         GaylandEvent::MouseButton {
                                             button: b.button(),
                                             pressed: b.button_state()
@@ -413,16 +424,15 @@ pub(crate) fn start_with_sink(
                                 let keycode = key.key();
                                 let pressed = key.key_state() == KeyState::Pressed;
                                 let t_ns = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+                                let info = key_info(keycode);
                                 let changed = if pressed {
                                     state.pressed_keys.insert(keycode)
                                 } else {
                                     state.pressed_keys.remove(&keycode)
                                 };
                                 if changed {
-                                    let info = key_info(keycode);
                                     emit_event(
-                                        &event_tx,
-                                        &mut event_sink,
+                                        &thread_subscribers,
                                         GaylandEvent::KeyboardKey {
                                             keycode,
                                             key_name: info.name,
@@ -431,7 +441,11 @@ pub(crate) fn start_with_sink(
                                             t_ns,
                                         },
                                     );
-                                    evaluate_hotkeys(&mut state, t_ns, &event_tx, &mut event_sink);
+                                    evaluate_hotkeys(
+                                        &mut state,
+                                        t_ns,
+                                        &thread_subscribers,
+                                    );
                                 }
                             }
                             _ => {}
@@ -447,8 +461,7 @@ pub(crate) fn start_with_sink(
                         clamp_bounds(&mut state);
                         let t_ns = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
                         emit_event(
-                            &event_tx,
-                            &mut event_sink,
+                            &thread_subscribers,
                             GaylandEvent::MousePosition {
                                 x: state.x,
                                 y: state.y,
@@ -466,8 +479,7 @@ pub(crate) fn start_with_sink(
             }
 
             emit_event(
-                &event_tx,
-                &mut event_sink,
+                &thread_subscribers,
                 GaylandEvent::State(StateEvent::Stopped),
             );
             info!("gayland runtime stopped");
@@ -478,6 +490,7 @@ pub(crate) fn start_with_sink(
     Ok((
         GaylandHandle {
             controller: GaylandController { tx: cmd_tx },
+            subscribers,
             finished,
             join: Some(thread),
         },
@@ -485,11 +498,10 @@ pub(crate) fn start_with_sink(
     ))
 }
 
-fn emit_event(tx: &Sender<GaylandEvent>, sink: &mut Option<EventSink>, event: GaylandEvent) {
-    if let Some(sink) = sink.as_mut() {
-        sink(&event);
+fn emit_event(subscribers: &Subscribers, event: GaylandEvent) {
+    if let Ok(mut subscribers) = subscribers.lock() {
+        subscribers.retain(|subscriber| subscriber.send(event).is_ok());
     }
-    let _ = tx.send(event);
 }
 
 fn is_hotkey_exact_match(st: &RuntimeState, spec: &HotkeySpec) -> bool {
@@ -502,18 +514,17 @@ fn is_hotkey_held(st: &RuntimeState, spec: &HotkeySpec) -> bool {
     !spec.is_empty() && spec.keys.iter().all(|k| st.pressed_keys.contains(k))
 }
 
-fn evaluate_hotkeys(
-    st: &mut RuntimeState,
-    t_ns: u64,
-    tx: &Sender<GaylandEvent>,
-    sink: &mut Option<EventSink>,
-) {
+fn evaluate_hotkeys(st: &mut RuntimeState, t_ns: u64, subscribers: &Subscribers) {
     let mut now_active = HashSet::new();
     for (id, spec) in &st.hotkeys {
         if is_hotkey_held(st, spec) {
             now_active.insert(*id);
             if is_hotkey_exact_match(st, spec) && !st.active_hotkeys.contains(id) {
-                emit_event(tx, sink, GaylandEvent::HotkeyTriggered { id: *id, t_ns });
+                debug!(
+                    "gayland hotkey exact match: id={} keys={:?} pressed={:?}",
+                    id, spec.keys, st.pressed_keys
+                );
+                emit_event(subscribers, GaylandEvent::HotkeyTriggered { id: *id, t_ns });
             }
         }
     }

@@ -374,6 +374,12 @@ pub struct FixedOptions {
     pub cursor_hotspot_y: String,
 
     pub output_path: Option<PathBuf>,
+
+    pub hotkeys_enabled: bool,
+    pub hotkey_stop: String,
+    pub hotkey_pause: String,
+    pub hotkey_resume: String,
+    pub hotkey_toggle_pause: String,
 }
 
 impl Default for FixedOptions {
@@ -402,6 +408,11 @@ impl Default for FixedOptions {
             cursor_hotspot_x: "0".to_string(),
             cursor_hotspot_y: "0".to_string(),
             output_path: None,
+            hotkeys_enabled: false,
+            hotkey_stop: "Ctrl+Shift+Q".to_string(),
+            hotkey_pause: "Ctrl+Shift+P".to_string(),
+            hotkey_resume: "Ctrl+Shift+R".to_string(),
+            hotkey_toggle_pause: "Ctrl+Shift+Space".to_string(),
         }
     }
 }

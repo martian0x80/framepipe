@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 mod ui;
 
 use framepipe::app::cli::CaptureArgs;
+use framepipe::app::hotkeys::{HotkeyAction, HotkeyBinding};
 use framepipe::drm_kms::types::LiveSettings;
 use framepipe::embedded_preview::EmbeddedPreviewSession;
 use framepipe::utils::tray::{TrayCallbacks, TrayController, spawn_tray};
@@ -52,6 +53,15 @@ pub enum Message {
     CursorHotspotXEdited(String),
     CursorHotspotYEdited(String),
     CursorScaleChanged(f32),
+    HotkeysEnabledToggled(bool),
+    HotkeyStopEdited(String),
+    HotkeyPauseEdited(String),
+    HotkeyResumeEdited(String),
+    HotkeyTogglePauseEdited(String),
+    ApplyHotkeyStop,
+    ApplyHotkeyPause,
+    ApplyHotkeyResume,
+    ApplyHotkeyTogglePause,
 
     PickOutputPath,
     OutputPathPicked(Option<rfd::FileHandle>),
@@ -128,7 +138,6 @@ pub struct App {
     ui_tick: u64,
     tray_rx: Option<mpsc::Receiver<TrayCommand>>,
     tray: Option<TrayController>,
-
     theme: Option<Theme>,
     background_cache: Option<iced::widget::image::Handle>,
 }
@@ -250,6 +259,11 @@ impl App {
     }
 
     fn build_capture_args(&self) -> CaptureArgs {
+        let hotkeys = if self.fixed.hotkeys_enabled {
+            self.configured_hotkeys().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         CaptureArgs {
             capture_backend: self.fixed.source.to_backend(),
             card: (!self.fixed.card.trim().is_empty()).then(|| self.fixed.card.trim().to_string()),
@@ -257,6 +271,8 @@ impl App {
                 .then(|| self.fixed.connector.trim().to_string()),
             allow_fallback_connector: self.fixed.allow_fallback_connector,
             fps: self.live.fps.max(1),
+            hotkeys,
+            disable_hotkeys: !self.fixed.hotkeys_enabled,
             output_width: Self::parse_opt_u32(&self.fixed.output_width),
             output_height: Self::parse_opt_u32(&self.fixed.output_height),
             dump_frames: self.fixed.dump_frames,
@@ -457,6 +473,23 @@ impl App {
                 }
             }
         }
+    }
+
+    fn configured_hotkeys(&self) -> Result<Vec<HotkeyBinding>, String> {
+        let mut bindings = Vec::new();
+        push_hotkey_binding(&mut bindings, HotkeyAction::Stop, &self.fixed.hotkey_stop)?;
+        push_hotkey_binding(&mut bindings, HotkeyAction::Pause, &self.fixed.hotkey_pause)?;
+        push_hotkey_binding(
+            &mut bindings,
+            HotkeyAction::Resume,
+            &self.fixed.hotkey_resume,
+        )?;
+        push_hotkey_binding(
+            &mut bindings,
+            HotkeyAction::TogglePause,
+            &self.fixed.hotkey_toggle_pause,
+        )?;
+        Ok(bindings)
     }
 
     fn sync_tray_state(&self) {
@@ -784,6 +817,41 @@ impl App {
                 self.apply_live();
                 Task::none()
             }
+            Message::HotkeysEnabledToggled(enabled) => {
+                self.fixed.hotkeys_enabled = enabled;
+                self.status = if enabled {
+                    "Recording-time hotkeys enabled".to_string()
+                } else {
+                    "Recording-time hotkeys disabled".to_string()
+                };
+                Task::none()
+            }
+            Message::HotkeyStopEdited(v) => {
+                self.fixed.hotkey_stop = v;
+                Task::none()
+            }
+            Message::HotkeyPauseEdited(v) => {
+                self.fixed.hotkey_pause = v;
+                Task::none()
+            }
+            Message::HotkeyResumeEdited(v) => {
+                self.fixed.hotkey_resume = v;
+                Task::none()
+            }
+            Message::HotkeyTogglePauseEdited(v) => {
+                self.fixed.hotkey_toggle_pause = v;
+                Task::none()
+            }
+            Message::ApplyHotkeyStop
+            | Message::ApplyHotkeyPause
+            | Message::ApplyHotkeyResume
+            | Message::ApplyHotkeyTogglePause => {
+                self.status = match self.configured_hotkeys() {
+                    Ok(bindings) => format!("Saved {} recording-time hotkeys", bindings.len()),
+                    Err(e) => format!("Invalid hotkey: {e}"),
+                };
+                Task::none()
+            }
 
             Message::PickOutputPath => Task::future(
                 rfd::AsyncFileDialog::new()
@@ -1006,6 +1074,22 @@ impl App {
     pub fn subscription(&self) -> Subscription<Message> {
         iced::time::every(self.ui_tick_period()).map(|_| Message::Tick)
     }
+}
+
+fn push_hotkey_binding(
+    bindings: &mut Vec<HotkeyBinding>,
+    action: HotkeyAction,
+    input: &str,
+) -> Result<(), String> {
+    let hotkey = input.trim();
+    if hotkey.is_empty() {
+        return Ok(());
+    }
+    bindings.push(HotkeyBinding {
+        action,
+        spec: hotkey.parse().map_err(|e| format!("{action:?}: {e}"))?,
+    });
+    Ok(())
 }
 
 impl Drop for App {

@@ -17,10 +17,14 @@ pub mod layer_shell;
 #[cfg(feature = "layer-shell")]
 pub use layer_shell::{LayerShellConfig, WaylandError};
 
-pub use runtime::{GaylandController, GaylandHandle, start as start_runtime};
+pub use runtime::{
+    GaylandController, GaylandHandle, GaylandHandle as InputRuntime, start as start_runtime,
+};
 #[cfg(feature = "layer-shell")]
 pub use session::start_layer_shell;
-pub use session::{TrackerConfig, TrackerError, TrackerSession, start_tracker};
+pub use session::{
+    TrackerAttachConfig, TrackerConfig, TrackerError, TrackerSession, start_tracker,
+};
 pub use {
     config::GaylandConfig,
     config::HotkeySpec,

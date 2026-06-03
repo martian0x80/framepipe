@@ -1,6 +1,6 @@
 #[cfg(feature = "layer-shell")]
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 #[cfg(feature = "layer-shell")]
 use std::thread::JoinHandle;
 
@@ -28,6 +28,20 @@ pub struct TrackerConfig {
     pub input_source: InputSource,
     #[cfg(feature = "layer-shell")]
     pub layer_shell: Option<LayerShellConfig>,
+}
+
+#[derive(Default)]
+pub struct TrackerAttachConfig {
+    #[cfg(feature = "layer-shell")]
+    pub layer_shell: Option<LayerShellConfig>,
+}
+
+impl TrackerAttachConfig {
+    #[cfg(feature = "layer-shell")]
+    pub fn with_layer_shell(mut self, layer_shell: LayerShellConfig) -> Self {
+        self.layer_shell = Some(layer_shell);
+        self
+    }
 }
 
 impl TrackerConfig {
@@ -73,13 +87,9 @@ pub struct TrackerSession {
 
 impl TrackerSession {
     pub fn start(config: TrackerConfig) -> Result<Self, TrackerError> {
-        let (event_tx, event_rx) = mpsc::channel();
-        let sink = Box::new(move |event: &GaylandEvent| {
-            let _ = event_tx.send(*event);
-        });
-        let (runtime, runtime_events) =
-            runtime::start_with_sink(config.runtime, config.input_source, Some(sink))
-                .map_err(TrackerError::Runtime)?;
+        let (runtime, event_rx) =
+            runtime::start(config.runtime, config.input_source).map_err(TrackerError::Runtime)?;
+        let runtime_events = runtime.subscribe();
 
         #[cfg(feature = "layer-shell")]
         {
@@ -92,6 +102,7 @@ impl TrackerSession {
                     control.clone(),
                     runtime.controller(),
                     runtime_events,
+                    true,
                 )?;
                 layer_control = Some(control);
                 layer_thread = Some(thread);
@@ -113,6 +124,47 @@ impl TrackerSession {
             Ok(Self {
                 events: event_rx,
                 runtime: Some(runtime),
+            })
+        }
+    }
+
+    pub fn attach(
+        runtime: &GaylandHandle,
+        config: TrackerAttachConfig,
+    ) -> Result<Self, TrackerError> {
+        let event_rx = runtime.subscribe();
+
+        #[cfg(feature = "layer-shell")]
+        {
+            let mut layer_control = None;
+            let mut layer_thread = None;
+            if let Some(layer_shell) = config.layer_shell {
+                let control = LayerShellControl::idle();
+                let thread = spawn_layer_shell(
+                    layer_shell,
+                    control.clone(),
+                    runtime.controller(),
+                    runtime.subscribe(),
+                    false,
+                )?;
+                layer_control = Some(control);
+                layer_thread = Some(thread);
+            }
+
+            Ok(Self {
+                events: event_rx,
+                runtime: None,
+                layer_control,
+                layer_thread,
+            })
+        }
+
+        #[cfg(not(feature = "layer-shell"))]
+        {
+            let _ = config;
+            Ok(Self {
+                events: event_rx,
+                runtime: None,
             })
         }
     }

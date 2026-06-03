@@ -35,20 +35,20 @@ pub fn run_capture_session(
         options.connector,
         options.fps
     );
-    let use_mouse_tracking = options.cursor_composition;
-    let input_fds_for_tracker = if use_mouse_tracking {
+    let use_input_tracking = options.cursor_composition || !options.hotkeys.is_empty();
+    let input_fds_for_tracker = if use_input_tracking {
         backend.take_input_fds()
     } else {
         None
     };
 
-    let mouse_ring: Option<Arc<RingBuffer>> = if use_mouse_tracking {
+    let mouse_ring: Option<Arc<RingBuffer>> = if options.cursor_composition {
         Some(Arc::new(RingBuffer::new(512)))
     } else {
         None
     };
 
-    let _mouse_tracking_worker = if use_mouse_tracking {
+    let _mouse_tracking_worker = if use_input_tracking {
         // if options.cursor_composition && !options.mouse_tracking {
         //     log::info!(
         //         "Cursor composition requested without --mouse-tracking; enabling internal mouse tracking automatically"
@@ -78,10 +78,11 @@ pub fn run_capture_session(
             encoder_backend: Some(options.encoder_backend.to_string()),
             video_codec: Some(options.video_codec.to_string()),
         };
-        let tracking_control =
-            TrackingControl::new(control.stop_requested.clone(), control.paused.clone());
+        let tracking_control = TrackingControl::new(control.clone());
         let ring_clone = mouse_ring.clone();
         let preopened_input_fds = input_fds_for_tracker;
+        let hotkeys = options.hotkeys.clone();
+        let enable_layer_shell = options.cursor_composition;
         let handle = thread::spawn(move || {
             if let Err(e) = init_wayland(
                 sync_frequency_hz,
@@ -90,8 +91,10 @@ pub fn run_capture_session(
                 recording_info,
                 ring_clone,
                 preopened_input_fds,
+                hotkeys,
+                enable_layer_shell,
             ) {
-                log::error!("Failed to initialize Wayland mouse tracking: {e}");
+                log::error!("Failed to initialize Wayland input tracking: {e}");
             }
         });
         Some(MouseTrackingWorker {

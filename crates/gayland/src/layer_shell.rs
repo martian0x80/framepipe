@@ -121,6 +121,7 @@ pub(crate) fn spawn_layer_shell(
     control: LayerShellControl,
     runtime: GaylandController,
     runtime_events: Receiver<GaylandEvent>,
+    pause_runtime: bool,
 ) -> Result<JoinHandle<Result<(), WaylandError>>, WaylandError> {
     thread::Builder::new()
         .name("gayland-layer-shell".to_string())
@@ -131,6 +132,7 @@ pub(crate) fn spawn_layer_shell(
                 control,
                 runtime,
                 runtime_events,
+                pause_runtime,
             })
         })
         .map_err(|e| WaylandError::ThreadStartFailed(e.to_string()))
@@ -142,6 +144,7 @@ struct LayerShellRun {
     control: LayerShellControl,
     runtime: GaylandController,
     runtime_events: Receiver<GaylandEvent>,
+    pause_runtime: bool,
 }
 
 fn run_layer_shell_loop(run: LayerShellRun) -> Result<(), WaylandError> {
@@ -151,6 +154,7 @@ fn run_layer_shell_loop(run: LayerShellRun) -> Result<(), WaylandError> {
         control,
         runtime,
         runtime_events,
+        pause_runtime,
     } = run;
 
     let conn = Connection::connect_to_env().map_err(|_| WaylandError::ConnectionFailed)?;
@@ -207,10 +211,12 @@ fn run_layer_shell_loop(run: LayerShellRun) -> Result<(), WaylandError> {
 
         let paused = control.paused.load(Ordering::Relaxed);
         if paused != last_paused {
-            if paused {
-                state.runtime.pause();
-            } else {
-                state.runtime.resume();
+            if pause_runtime {
+                if paused {
+                    state.runtime.pause();
+                } else {
+                    state.runtime.resume();
+                }
             }
             last_paused = paused;
         }
@@ -284,7 +290,6 @@ fn run_layer_shell_loop(run: LayerShellRun) -> Result<(), WaylandError> {
         }
     }
 
-    state.runtime.stop();
     info!("Layer-shell tracking event loop exiting");
     Ok(())
 }

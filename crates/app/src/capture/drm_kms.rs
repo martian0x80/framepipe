@@ -17,7 +17,7 @@ pub struct DrmKmsBackend {
 
 impl CaptureBackend for DrmKmsBackend {
     fn start(&mut self, options: &CaptureOptions) -> Result<(), EglError> {
-        let include_input_fds = options.cursor_composition;
+        let include_input_fds = options.cursor_composition || !options.hotkeys.is_empty();
         let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
             .map_err(|e| {
                 EglError::Pipeline(format!("failed to acquire device fds from privd: {e}"))

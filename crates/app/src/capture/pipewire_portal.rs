@@ -33,7 +33,7 @@ impl CaptureBackend for PipeWirePortalBackend {
         self.producer = None;
         self.first_frame_seen = false;
         self.last_frame = None;
-        let include_input_fds = options.cursor_composition;
+        let include_input_fds = options.cursor_composition || !options.hotkeys.is_empty();
         if include_input_fds {
             let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
                 .map_err(|e| {

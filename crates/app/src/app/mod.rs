@@ -2,6 +2,7 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod hotkeys;
 pub mod signals;
 
 use eyre::Result;

@@ -3,32 +3,30 @@ use std::{
     io::{BufWriter, Write},
     os::fd::OwnedFd,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
 use bitcode::{Decode, Encode};
 use gayland::{
-    GaylandEvent, InputSource, LayerShellConfig, TrackerConfig, WaylandError, start_tracker,
+    GaylandConfig, GaylandEvent, InputSource, LayerShellConfig, TrackerConfig, WaylandError,
+    start_tracker,
 };
 
+use crate::app::{
+    hotkeys::{HotkeyBinding, apply_action},
+    signals::CaptureControl,
+};
 use crate::shared::mouse_ring::{MouseEvent, RingBuffer};
 
 #[derive(Clone)]
 pub struct TrackingControl {
-    pub stop_requested: Arc<AtomicBool>,
-    pub paused: Arc<AtomicBool>,
+    pub capture: CaptureControl,
 }
 
 impl TrackingControl {
-    pub fn new(stop_requested: Arc<AtomicBool>, paused: Arc<AtomicBool>) -> Self {
-        Self {
-            stop_requested,
-            paused,
-        }
+    pub fn new(capture: CaptureControl) -> Self {
+        Self { capture }
     }
 }
 
@@ -71,69 +69,115 @@ pub fn init_wayland(
     recording: MouseTrackRecordingInfo,
     ring: Option<Arc<RingBuffer>>,
     input_fds: Option<HashMap<PathBuf, OwnedFd>>,
+    hotkeys: Vec<HotkeyBinding>,
+    enable_layer_shell: bool,
 ) -> Result<(), WaylandError> {
     log::info!("Initializing Wayland connection and event loop");
-    log::info!(
-        "Mouse tracking output file: {}",
-        file_path.to_string_lossy()
-    );
+    if enable_layer_shell {
+        log::info!(
+            "Mouse tracking output file: {}",
+            file_path.to_string_lossy()
+        );
+    }
 
-    let input_source = if let Some(fds_by_path) = input_fds {
-        InputSource::Preopened { fds_by_path }
-    } else {
-        InputSource::DirectOpen
+    let input_source = input_fds
+        .map(|fds_by_path| InputSource::Preopened { fds_by_path })
+        .ok_or_else(|| {
+            WaylandError::RuntimeStartFailed(
+                "preopened input fds are required for wayland tracking".to_string(),
+            )
+        })?;
+
+    let mut runtime_config = GaylandConfig {
+        enable_mouse: enable_layer_shell,
+        enable_keyboard: !hotkeys.is_empty(),
+        ..Default::default()
     };
+    let mut hotkey_actions = HashMap::with_capacity(hotkeys.len());
+    for (idx, binding) in hotkeys.into_iter().enumerate() {
+        let id = idx as u64 + 1;
+        runtime_config.hotkeys.insert(id, binding.spec);
+        hotkey_actions.insert(id, binding.action);
+    }
 
-    let tracker = start_tracker(TrackerConfig::new(input_source).with_layer_shell(
-        LayerShellConfig {
+    let config = TrackerConfig::new(input_source).with_runtime(runtime_config);
+    let config = if enable_layer_shell {
+        config.with_layer_shell(LayerShellConfig {
             namespace: "openstudio".to_string(),
             sync_frequency_hz,
-        },
-    ))
-    .map_err(|e| match e {
+        })
+    } else {
+        config
+    };
+    let tracker = start_tracker(config).map_err(|e| match e {
         gayland::TrackerError::LayerShell(e) => e,
         other => WaylandError::RuntimeStartFailed(other.to_string()),
     })?;
 
-    let mut sink = FramepipeMouseSink::new(file_path, recording, ring)
+    let mut sink = ring
+        .is_some()
+        .then(|| FramepipeMouseSink::new(file_path, recording, ring))
+        .transpose()
         .map_err(|_| WaylandError::ConnectionFailed)?;
-    let mut paused = control.paused.load(Ordering::Relaxed);
+    let mut paused = control.capture.paused.load(Ordering::Relaxed);
 
     loop {
-        if control.stop_requested.load(Ordering::Relaxed) {
-            log::info!("Mouse tracking stop requested");
+        if control.capture.stop_requested.load(Ordering::Relaxed) {
+            log::info!("Input tracking stop requested");
             tracker.stop();
             break;
         }
 
-        let now_paused = control.paused.load(Ordering::Relaxed);
+        let now_paused = control.capture.paused.load(Ordering::Relaxed);
         if now_paused != paused {
             if now_paused {
                 tracker.pause();
-                sink.set_paused(true);
+                if let Some(sink) = &mut sink {
+                    sink.set_paused(true);
+                }
             } else {
                 tracker.resume();
-                sink.set_paused(false);
+                if let Some(sink) = &mut sink {
+                    sink.set_paused(false);
+                }
             }
             paused = now_paused;
         }
 
         match tracker.events.recv_timeout(Duration::from_millis(10)) {
-            Ok(event) => sink.handle_event(event),
+            Ok(event) => match event {
+                GaylandEvent::HotkeyTriggered { id, .. } => {
+                    if let Some(action) = hotkey_actions.get(&id).copied() {
+                        log::debug!("recording hotkey triggered: id={id} action={action}");
+                        apply_action(action, &control.capture);
+                    }
+                }
+                event => {
+                    if let Some(sink) = &mut sink {
+                        sink.handle_event(event);
+                    }
+                }
+            },
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 
-    sink.flush();
+    if let Some(sink) = &mut sink {
+        sink.flush();
+    }
     tracker.join().map_err(|e| match e {
         gayland::TrackerError::LayerShell(e) => e,
         other => WaylandError::RuntimeStartFailed(other.to_string()),
     })?;
-    log::info!(
-        "Mouse tracking event loop exiting, data written to {}",
-        file_path.display()
-    );
+    if sink.is_some() {
+        log::info!(
+            "Mouse tracking event loop exiting, data written to {}",
+            file_path.display()
+        );
+    } else {
+        log::info!("Input tracking event loop exiting");
+    }
     Ok(())
 }
 
