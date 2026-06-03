@@ -1,14 +1,14 @@
 # gayland
 
-`gayland` is a Linux input tracking crate for wayland tools that need global-ish mouse and keyboard events through libinput, with optional Wayland layer-shell anchoring for cursor position.
+`gayland` is a Linux input tracking crate for Wayland tools that need global-ish mouse and keyboard events through libinput, with optional Wayland layer-shell anchoring for cursor position.
 
 The crate is intentionally small:
 
 - libinput mouse and keyboard event tracking
+- strict multi-key hotkey detection
 - direct input device opening for local tools
 - pre-opened input FD support for privileged-helper or sandboxed integrations
 - optional Wayland layer-shell anchoring for absolute cursor coordinates
-<!-- - edge-triggered hotkey scaffolding -->
 - optional generic bitcode-framed recording helpers
 
 ## Quick Start
@@ -30,6 +30,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Hotkeys
+
+Hotkeys are registered before the tracker starts:
+
+```rust,no_run
+use gayland::{InputSource, TrackerConfig, start_tracker};
+
+const HOTKEY_CTRL_SHIFT_R: u64 = 1;
+let tracker = start_tracker(
+    TrackerConfig::new(InputSource::DirectOpen)
+        .with_hotkey_str(HOTKEY_CTRL_SHIFT_R, "Ctrl+Shift+R")?,
+)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Matching is strict: a hotkey fires only when the currently pressed key set exactly matches the hotkey's key set. Repeats are edge-triggered, so holding the chord does not emit repeated hotkey events.
+
+Key names are converted to evdev keycodes before matching. This keeps hotkeys physical and layout-independent. Keyboard events also include a best-effort evdev key name for overlays/logging; full layout-aware text conversion is not currently supported, but feel free to open an issue if that's a feature you'd like to see.
+
 ## Input Sources
 
 `InputSource::DirectOpen` lets `gayland` open input devices directly through libinput. This usually requires appropriate permissions.
@@ -50,8 +69,10 @@ This is useful for capture/overlay tools that need cursor position without depen
 - `recording`: generic bitcode-framed recording utilities.
 
 ## Caveats
-- Layer-shell anchoring is not perfect and may have edge cases where the cursor can get out of sync. The `sync_frequency_hz` config option can help mitigate this by periodically re-anchoring, but it may not be suitable for all use cases.
-- Periodically re-anchoring requries stealing pointer focus (can be configured with `sync_frequency_hz`) which may interfere with user interactions. Setting `sync_frequency_hz` to 0 will anchor once and then rely on libinput deltas, but this may lead to drift over time and not recommended.
+
+- Layer-shell anchoring can drift if libinput deltas and compositor cursor state diverge.
+- `sync_frequency_hz` can periodically re-anchor, but it briefly changes pointer focus and may interfere with interactions.
+- Setting `sync_frequency_hz` to `0.0` anchors once and then relies only on libinput deltas.
 
 ## Status
 

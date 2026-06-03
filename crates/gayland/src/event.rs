@@ -28,8 +28,9 @@ pub enum GaylandEvent {
     },
     KeyboardKey {
         keycode: u32,
+        key_name: Option<&'static str>,
+        is_modifier: bool,
         pressed: bool,
-        mods_mask: u32,
         t_ns: u64,
     },
     HotkeyTriggered {

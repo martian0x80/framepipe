@@ -4,8 +4,9 @@ use std::sync::mpsc::{self, Receiver};
 #[cfg(feature = "layer-shell")]
 use std::thread::JoinHandle;
 
-use crate::config::{GaylandConfig, InputSource};
+use crate::config::{GaylandConfig, HotkeySpec, InputSource};
 use crate::event::GaylandEvent;
+use crate::keyboard::HotkeyParseError;
 use crate::runtime::{self, GaylandHandle};
 
 #[cfg(feature = "layer-shell")]
@@ -37,6 +38,21 @@ impl TrackerConfig {
             #[cfg(feature = "layer-shell")]
             layer_shell: None,
         }
+    }
+
+    pub fn with_runtime(mut self, runtime: GaylandConfig) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
+    pub fn with_hotkey(mut self, id: u64, spec: HotkeySpec) -> Self {
+        self.runtime.hotkeys.insert(id, spec);
+        self
+    }
+
+    pub fn with_hotkey_str(mut self, id: u64, hotkey: &str) -> Result<Self, HotkeyParseError> {
+        self.runtime.hotkeys.insert(id, hotkey.parse()?);
+        Ok(self)
     }
 
     #[cfg(feature = "layer-shell")]

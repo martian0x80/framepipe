@@ -15,6 +15,7 @@ use log::{info, warn};
 
 use crate::config::{GaylandConfig, HotkeySpec, InputSource};
 use crate::event::{GaylandEvent, StateEvent};
+use crate::keyboard::key_info;
 
 pub(crate) type EventSink = Box<dyn FnMut(&GaylandEvent) + Send + 'static>;
 
@@ -222,7 +223,10 @@ pub(crate) fn start_with_sink(
     let thread = thread::Builder::new()
         .name("gayland-runtime".into())
         .spawn(move || {
-            let mut state = RuntimeState::default();
+            let mut state = RuntimeState {
+                hotkeys: config.hotkeys.clone(),
+                ..Default::default()
+            };
             let iface = match source {
                 InputSource::Preopened { fds_by_path } => {
                     info!("gayland: using {} preopened fds", fds_by_path.len());
@@ -415,14 +419,15 @@ pub(crate) fn start_with_sink(
                                     state.pressed_keys.remove(&keycode)
                                 };
                                 if changed {
-                                    let mods_mask = 0_u32;
+                                    let info = key_info(keycode);
                                     emit_event(
                                         &event_tx,
                                         &mut event_sink,
                                         GaylandEvent::KeyboardKey {
                                             keycode,
+                                            key_name: info.name,
+                                            is_modifier: info.is_modifier,
                                             pressed,
-                                            mods_mask,
                                             t_ns,
                                         },
                                     );
@@ -487,6 +492,16 @@ fn emit_event(tx: &Sender<GaylandEvent>, sink: &mut Option<EventSink>, event: Ga
     let _ = tx.send(event);
 }
 
+fn is_hotkey_exact_match(st: &RuntimeState, spec: &HotkeySpec) -> bool {
+    !spec.is_empty()
+        && st.pressed_keys.len() == spec.keys.len()
+        && spec.keys.iter().all(|k| st.pressed_keys.contains(k))
+}
+
+fn is_hotkey_held(st: &RuntimeState, spec: &HotkeySpec) -> bool {
+    !spec.is_empty() && spec.keys.iter().all(|k| st.pressed_keys.contains(k))
+}
+
 fn evaluate_hotkeys(
     st: &mut RuntimeState,
     t_ns: u64,
@@ -495,9 +510,9 @@ fn evaluate_hotkeys(
 ) {
     let mut now_active = HashSet::new();
     for (id, spec) in &st.hotkeys {
-        if st.pressed_keys.contains(&spec.keycode) {
+        if is_hotkey_held(st, spec) {
             now_active.insert(*id);
-            if !st.active_hotkeys.contains(id) {
+            if is_hotkey_exact_match(st, spec) && !st.active_hotkeys.contains(id) {
                 emit_event(tx, sink, GaylandEvent::HotkeyTriggered { id: *id, t_ns });
             }
         }
