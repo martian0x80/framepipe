@@ -375,6 +375,13 @@ pub struct FixedOptions {
 
     pub output_path: Option<PathBuf>,
 
+    pub keyboard_overlay: bool,
+    pub keyboard_overlay_duration_ms: String,
+    pub keyboard_overlay_fade_ms: String,
+    pub keyboard_overlay_debounce_ms: String,
+    pub keyboard_overlay_show_single_modifiers: bool,
+    pub keyboard_overlay_font: Option<PathBuf>,
+
     pub hotkeys_enabled: bool,
     pub hotkey_stop: String,
     pub hotkey_pause: String,
@@ -408,6 +415,16 @@ impl Default for FixedOptions {
             cursor_hotspot_x: "0".to_string(),
             cursor_hotspot_y: "0".to_string(),
             output_path: None,
+            keyboard_overlay: false,
+            keyboard_overlay_duration_ms:
+                framepipe::capture::key_overlay::DEFAULT_DISPLAY_DURATION_MS.to_string(),
+            keyboard_overlay_fade_ms: framepipe::capture::key_overlay::DEFAULT_FADE_DURATION_MS
+                .to_string(),
+            keyboard_overlay_debounce_ms: framepipe::capture::key_overlay::DEFAULT_DEBOUNCE_MS
+                .to_string(),
+            keyboard_overlay_show_single_modifiers:
+                framepipe::capture::key_overlay::DEFAULT_SHOW_SINGLE_MODIFIERS,
+            keyboard_overlay_font: None,
             hotkeys_enabled: false,
             hotkey_stop: "Ctrl+Shift+Q".to_string(),
             hotkey_pause: "Ctrl+Shift+P".to_string(),

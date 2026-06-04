@@ -54,6 +54,12 @@ pub fn build_capture_options(
         } else {
             capture.hotkeys
         },
+        keyboard_overlay: capture.keyboard_overlay,
+        keyboard_overlay_duration_ms: capture.keyboard_overlay_duration_ms.max(1),
+        keyboard_overlay_fade_ms: capture.keyboard_overlay_fade_ms.max(1),
+        keyboard_overlay_debounce_ms: capture.keyboard_overlay_debounce_ms,
+        keyboard_overlay_show_single_modifiers: capture.keyboard_overlay_show_single_modifiers,
+        keyboard_overlay_font: capture.keyboard_overlay_font,
         cursor_sprite: capture.cursor_sprite,
         cursor_hotspot_x: capture.cursor_hotspot_x,
         cursor_hotspot_y: capture.cursor_hotspot_y,

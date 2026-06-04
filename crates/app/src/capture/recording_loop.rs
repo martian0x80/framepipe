@@ -9,7 +9,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::capture::backend::CaptureBackend;
 use crate::cursor::cursor::*;
 use crate::drm_kms::{
     debug, egl_dmabuf_export, gpu_pipeline,
@@ -19,6 +18,13 @@ use crate::drm_kms::{
 use crate::shared::mouse_ring::RingBuffer;
 use crate::wayland::runtime::{MouseTrackRecordingInfo, TrackingControl, init_wayland};
 use crate::{app::signals::CaptureControl, drm_kms::types::Profile, utils::types::ProcessState};
+use crate::{
+    capture::{
+        backend::CaptureBackend,
+        key_overlay::{KeyOverlayConfig, KeyOverlayRenderer, KeyOverlayState},
+    },
+    shared::keyboard_ring::KeyboardOverlayRingBuffer,
+};
 
 use crate::drm_kms::egl_context::{
     EglCtx, EglError, delete_gl_texture, import_capture_frame_texture, init_egl,
@@ -35,7 +41,8 @@ pub fn run_capture_session(
         options.connector,
         options.fps
     );
-    let use_input_tracking = options.cursor_composition || !options.hotkeys.is_empty();
+    let use_input_tracking =
+        options.cursor_composition || options.keyboard_overlay || !options.hotkeys.is_empty();
     let input_fds_for_tracker = if use_input_tracking {
         backend.take_input_fds()
     } else {
@@ -44,6 +51,13 @@ pub fn run_capture_session(
 
     let mouse_ring: Option<Arc<RingBuffer>> = if options.cursor_composition {
         Some(Arc::new(RingBuffer::new(512)))
+    } else {
+        None
+    };
+
+    let keyboard_overlay_enabled = options.keyboard_overlay;
+    let keyboard_ring: Option<Arc<KeyboardOverlayRingBuffer>> = if keyboard_overlay_enabled {
+        Some(Arc::new(KeyboardOverlayRingBuffer::new(64)))
     } else {
         None
     };
@@ -80,6 +94,7 @@ pub fn run_capture_session(
         };
         let tracking_control = TrackingControl::new(control.clone());
         let ring_clone = mouse_ring.clone();
+        let keyboard_ring_clone = keyboard_ring.clone();
         let preopened_input_fds = input_fds_for_tracker;
         let hotkeys = options.hotkeys.clone();
         let enable_layer_shell = options.cursor_composition;
@@ -90,6 +105,7 @@ pub fn run_capture_session(
                 tracking_control,
                 recording_info,
                 ring_clone,
+                keyboard_ring_clone,
                 preopened_input_fds,
                 hotkeys,
                 enable_layer_shell,
@@ -213,6 +229,7 @@ pub fn run_capture_session(
     }
 
     let cursor_state_empty = gpu_pipeline::CursorState::empty();
+    let overlay_state_empty = gpu_pipeline::OverlayState::empty();
     let mut cursor_smoother = CursorSmoother::default();
     let (cursor_tex, cursor_w, cursor_h, hotspot_x, hotspot_y) = if options.cursor_composition {
         let (tex, base_w, base_h, auto_hotspot) =
@@ -268,6 +285,7 @@ pub fn run_capture_session(
             NativeTexture(NonZero::new(texture).unwrap()),
             first_use_external_texture,
             &cursor_state_empty,
+            &overlay_state_empty,
             None, // no background yet
             1.0,  // no frame zoom
         )
@@ -364,6 +382,26 @@ pub fn run_capture_session(
     let mut last_bg_version: u64 = u64::MAX;
     // Background texture handle (None until a path is resolved on first frame).
     let mut live_bg_tex: Option<glow::NativeTexture> = None;
+    let key_overlay_config = KeyOverlayConfig::from_millis(
+        options.keyboard_overlay_duration_ms,
+        options.keyboard_overlay_fade_ms,
+        options.keyboard_overlay_debounce_ms,
+        options.keyboard_overlay_show_single_modifiers,
+    );
+    let mut key_overlay_state = KeyOverlayState::new(key_overlay_config);
+    let mut key_overlay_renderer = if keyboard_overlay_enabled {
+        match KeyOverlayRenderer::new(options.keyboard_overlay_font.as_deref()) {
+            Ok(renderer) => Some(renderer),
+            Err(e) => {
+                log::warn!("keyboard overlay disabled: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut key_overlay_tex: Option<glow::NativeTexture> = None;
+    let mut key_overlay_size = (0.0_f32, 0.0_f32);
 
     while !control.stop_requested.load(Ordering::Relaxed) {
         // Snapshot live-mutable settings once at the top of each iteration.
@@ -626,6 +664,49 @@ pub fn run_capture_session(
         };
 
         let slot = (frame_idx as usize) % pipelines.len();
+        let overlay_state = if let Some(ring) = keyboard_ring.as_ref() {
+            let now = Instant::now();
+            key_overlay_state.ingest_ring(ring, now);
+            key_overlay_state.prune(now);
+
+            if let Some(label) = key_overlay_state.take_dirty_label() {
+                if let Some(old_tex) = key_overlay_tex.take() {
+                    let _ = delete_gl_texture(&egl, old_tex.0.into());
+                }
+                if let (Some(label), Some(renderer)) = (label, key_overlay_renderer.as_mut()) {
+                    let bitmap = renderer.render(&label).map_err(EglError::Pipeline)?;
+                    let tex = gpu_pipeline::upload_rgba_texture(
+                        &pipelines[slot].gl,
+                        &bitmap.pixels,
+                        bitmap.width,
+                        bitmap.height,
+                    )
+                    .map_err(EglError::Pipeline)?;
+                    key_overlay_size = (bitmap.width as f32, bitmap.height as f32);
+                    key_overlay_tex = Some(tex);
+                } else {
+                    key_overlay_size = (0.0, 0.0);
+                }
+            }
+
+            if let Some(tex) = key_overlay_tex {
+                let alpha = key_overlay_state.alpha(now);
+                let w = key_overlay_size.0;
+                let h = key_overlay_size.1;
+                gpu_pipeline::OverlayState {
+                    tex: Some(tex),
+                    x: ((output_w as f32 - w) * 0.5).max(0.0),
+                    y: (output_h as f32 - h - 72.0).max(0.0),
+                    w,
+                    h,
+                    alpha,
+                }
+            } else {
+                overlay_state_empty
+            }
+        } else {
+            overlay_state_empty
+        };
         let bg = if live.background_enabled {
             live_bg_tex
         } else {
@@ -641,6 +722,7 @@ pub fn run_capture_session(
                 NativeTexture(NonZero::new(frame_texture).unwrap()),
                 use_external_texture,
                 &cursor_state,
+                &overlay_state,
                 bg,
                 zoom,
             )
@@ -755,6 +837,11 @@ pub fn run_capture_session(
     if let Some(bg_tex) = live_bg_tex {
         delete_gl_texture(&egl, bg_tex.0.into())
             .map_err(|e| EglError::Pipeline(format!("failed to delete background texture: {e}")))?;
+    }
+    if let Some(overlay_tex) = key_overlay_tex {
+        delete_gl_texture(&egl, overlay_tex.0.into()).map_err(|e| {
+            EglError::Pipeline(format!("failed to delete key overlay texture: {e}"))
+        })?;
     }
 
     if let Some(enc) = encoder {

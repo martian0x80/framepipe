@@ -11,6 +11,7 @@ drm-sys = { workspace = true }
 env_logger = { workspace = true }
 eyre = "0.6.12"
 fastrand = "2.3.0"
+fontdue = "0.9.3"
 gbm = { version = "0.18.0", features = ["drm-support"] }
 gl = { workspace = true }
 glow = "0.16.0"

@@ -62,6 +62,41 @@ pub struct CaptureArgs {
         help = "Disable recording-time control hotkeys even when --hotkey is provided"
     )]
     pub disable_hotkeys: bool,
+    #[arg(
+        long = "keyboard-overlay",
+        default_value_t = false,
+        help = "Render pressed keyboard keys as an overlay on captured frames"
+    )]
+    pub keyboard_overlay: bool,
+    #[arg(
+        long = "keyboard-overlay-duration-ms",
+        default_value_t = crate::capture::key_overlay::DEFAULT_DISPLAY_DURATION_MS,
+        help = "How long released keys remain visible in the keyboard overlay"
+    )]
+    pub keyboard_overlay_duration_ms: u64,
+    #[arg(
+        long = "keyboard-overlay-fade-ms",
+        default_value_t = crate::capture::key_overlay::DEFAULT_FADE_DURATION_MS,
+        help = "Fade-out duration for released keyboard overlay keys"
+    )]
+    pub keyboard_overlay_fade_ms: u64,
+    #[arg(
+        long = "keyboard-overlay-debounce-ms",
+        default_value_t = crate::capture::key_overlay::DEFAULT_DEBOUNCE_MS,
+        help = "Ignore repeated press events for the same held key within this window"
+    )]
+    pub keyboard_overlay_debounce_ms: u64,
+    #[arg(
+        long = "keyboard-overlay-show-single-modifiers",
+        default_value_t = crate::capture::key_overlay::DEFAULT_SHOW_SINGLE_MODIFIERS,
+        help = "Show modifier-only key states, such as Ctrl or Ctrl+Shift, before a non-modifier key completes the combo"
+    )]
+    pub keyboard_overlay_show_single_modifiers: bool,
+    #[arg(
+        long = "keyboard-overlay-font",
+        help = "TTF/OTF font path for keyboard overlay text. Omit to use the built-in bitmap glyphs"
+    )]
+    pub keyboard_overlay_font: Option<PathBuf>,
     #[arg(long)]
     pub output_width: Option<u32>,
     #[arg(long)]
@@ -248,6 +283,13 @@ impl Default for CaptureArgs {
             fps: 60,
             hotkeys: Vec::new(),
             disable_hotkeys: false,
+            keyboard_overlay: false,
+            keyboard_overlay_duration_ms: crate::capture::key_overlay::DEFAULT_DISPLAY_DURATION_MS,
+            keyboard_overlay_fade_ms: crate::capture::key_overlay::DEFAULT_FADE_DURATION_MS,
+            keyboard_overlay_debounce_ms: crate::capture::key_overlay::DEFAULT_DEBOUNCE_MS,
+            keyboard_overlay_show_single_modifiers:
+                crate::capture::key_overlay::DEFAULT_SHOW_SINGLE_MODIFIERS,
+            keyboard_overlay_font: None,
             output_width: None,
             output_height: None,
             dump_frames: false,

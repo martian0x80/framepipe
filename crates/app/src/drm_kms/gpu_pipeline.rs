@@ -72,6 +72,85 @@ impl CursorState {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct OverlayState {
+    pub tex: Option<glow::NativeTexture>,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub alpha: f32,
+}
+
+impl OverlayState {
+    pub fn empty() -> Self {
+        Self {
+            tex: None,
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+            alpha: 0.0,
+        }
+    }
+}
+
+pub fn upload_rgba_texture(
+    gl: &glow::Context,
+    pixels: &[u8],
+    width: i32,
+    height: i32,
+) -> Result<glow::NativeTexture, String> {
+    if width <= 0 || height <= 0 {
+        return Err(format!("invalid overlay texture size: {width}x{height}"));
+    }
+    let expected = width as usize * height as usize * 4;
+    if pixels.len() != expected {
+        return Err(format!(
+            "invalid overlay pixel buffer: got {}, expected {}",
+            pixels.len(),
+            expected
+        ));
+    }
+
+    unsafe {
+        let tex = gl.create_texture().map_err(|e| e.to_string())?;
+        gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA8 as i32,
+            width,
+            height,
+            0,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(Some(pixels)),
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_S,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_T,
+            glow::CLAMP_TO_EDGE as i32,
+        );
+        Ok(tex)
+    }
+}
+
 // todo: update the default texture
 pub fn create_default_cursor_texture(gl: &glow::Context) -> Result<glow::NativeTexture, String> {
     let size = 24i32;
@@ -187,9 +266,13 @@ impl GpuPipeline {
             uniform sampler2D u_src;
             uniform sampler2D u_cursor;
             uniform sampler2D u_bg;
+            uniform sampler2D u_overlay;
             uniform int u_bg_enabled;
             uniform float u_frame_zoom;
             uniform vec2 u_frame_offset;
+            uniform int u_overlay_enabled;
+            uniform vec4 u_overlay_rect;
+            uniform float u_overlay_alpha;
             uniform int u_cursor_tap_count;
             uniform vec3 u_cursor_taps[8]; // x,y,alpha in output pixel space
             uniform vec2 u_cursor_size_px; // w,h
@@ -240,6 +323,18 @@ impl GpuPipeline {
                         base.a = 1.0;
                     }
                 }
+                if (u_overlay_enabled == 1) {
+                    vec2 omin = u_overlay_rect.xy;
+                    vec2 osize = u_overlay_rect.zw;
+                    vec2 omax = omin + osize;
+                    if (p.x >= omin.x && p.y >= omin.y && p.x < omax.x && p.y < omax.y) {
+                        vec2 ouv = (p - omin) / osize;
+                        vec4 ov = texture(u_overlay, ouv);
+                        float alpha = clamp(ov.a * u_overlay_alpha, 0.0, 1.0);
+                        base.rgb = ov.rgb * alpha + base.rgb * (1.0 - alpha);
+                        base.a = 1.0;
+                    }
+                }
                 o = base;
             }"#;
         let fs_external = r#"#version 300 es
@@ -249,9 +344,13 @@ impl GpuPipeline {
             uniform samplerExternalOES u_src;
             uniform sampler2D u_cursor;
             uniform sampler2D u_bg;
+            uniform sampler2D u_overlay;
             uniform int u_bg_enabled;
             uniform float u_frame_zoom;
             uniform vec2 u_frame_offset;
+            uniform int u_overlay_enabled;
+            uniform vec4 u_overlay_rect;
+            uniform float u_overlay_alpha;
             uniform int u_cursor_tap_count;
             uniform vec3 u_cursor_taps[8]; // x,y,alpha in output pixel space
             uniform vec2 u_cursor_size_px; // w,h
@@ -299,6 +398,18 @@ impl GpuPipeline {
                         vec4 c = texture(u_cursor, cuv);
                         float alpha = clamp(c.a * u_cursor_taps[i].z, 0.0, 1.0);
                         base.rgb = c.rgb * alpha + base.rgb * (1.0 - alpha);
+                        base.a = 1.0;
+                    }
+                }
+                if (u_overlay_enabled == 1) {
+                    vec2 omin = u_overlay_rect.xy;
+                    vec2 osize = u_overlay_rect.zw;
+                    vec2 omax = omin + osize;
+                    if (p.x >= omin.x && p.y >= omin.y && p.x < omax.x && p.y < omax.y) {
+                        vec2 ouv = (p - omin) / osize;
+                        vec4 ov = texture(u_overlay, ouv);
+                        float alpha = clamp(ov.a * u_overlay_alpha, 0.0, 1.0);
+                        base.rgb = ov.rgb * alpha + base.rgb * (1.0 - alpha);
                         base.a = 1.0;
                     }
                 }
@@ -433,6 +544,7 @@ impl GpuPipeline {
         src_tex: glow::NativeTexture,
         use_external_texture: bool,
         cursor: &CursorState,
+        overlay: &OverlayState,
         bg_tex: Option<glow::NativeTexture>,
         frame_zoom: f32,
     ) -> Result<glow::NativeFence, String> {
@@ -563,6 +675,37 @@ impl GpuPipeline {
                     .uniform_1_i32(self.gl.get_uniform_location(program, "u_bg").as_ref(), 2);
             }
 
+            let overlay_enabled = overlay.tex.is_some() && overlay.alpha > 0.0;
+            self.gl.uniform_1_i32(
+                self.gl
+                    .get_uniform_location(program, "u_overlay_enabled")
+                    .as_ref(),
+                overlay_enabled as i32,
+            );
+            self.gl.uniform_4_f32(
+                self.gl
+                    .get_uniform_location(program, "u_overlay_rect")
+                    .as_ref(),
+                overlay.x,
+                overlay.y,
+                overlay.w,
+                overlay.h,
+            );
+            self.gl.uniform_1_f32(
+                self.gl
+                    .get_uniform_location(program, "u_overlay_alpha")
+                    .as_ref(),
+                overlay.alpha,
+            );
+            if let Some(otex) = overlay.tex {
+                self.gl.active_texture(glow::TEXTURE3);
+                self.gl.bind_texture(glow::TEXTURE_2D, Some(otex));
+                self.gl.uniform_1_i32(
+                    self.gl.get_uniform_location(program, "u_overlay").as_ref(),
+                    3,
+                );
+            }
+
             self.gl.bind_vertex_array(Some(self.vao));
             self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
 
@@ -587,6 +730,7 @@ impl GpuPipeline {
             }
             // RGBA8 only readback for now
             let mut pixels = vec![0u8; (self.out_w * self.out_h * 4) as usize];
+            // todo: use PBO for async readback to avoid stalling the GPU
             // let pbo = glow::Context::create_buffer(&self.gl).map_err(|e| e.to_string())?;
             // self.gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
             // self.gl.buffer_data_u8_slice(

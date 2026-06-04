@@ -4,6 +4,7 @@
 - Update gui size for proper dialog scaling.
 - Add pages to gui for configuring capture and recording control.
 - Add runtime libinput based hotkey support.
+- Add key overlay support. Custom TTF + default bitmap. Modifier only overlay support.
 
 ## [0.1.2] - 2026-04-27
 ### Changed

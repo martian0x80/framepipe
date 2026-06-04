@@ -53,6 +53,14 @@ pub enum Message {
     CursorHotspotXEdited(String),
     CursorHotspotYEdited(String),
     CursorScaleChanged(f32),
+    KeyboardOverlayToggled(bool),
+    KeyboardOverlayDurationEdited(String),
+    KeyboardOverlayFadeEdited(String),
+    KeyboardOverlayDebounceEdited(String),
+    KeyboardOverlayShowSingleModifiersToggled(bool),
+    PickKeyboardOverlayFont,
+    KeyboardOverlayFontPicked(Option<rfd::FileHandle>),
+    KeyboardOverlayFontClear,
     HotkeysEnabledToggled(bool),
     HotkeyStopEdited(String),
     HotkeyPauseEdited(String),
@@ -273,6 +281,25 @@ impl App {
             fps: self.live.fps.max(1),
             hotkeys,
             disable_hotkeys: !self.fixed.hotkeys_enabled,
+            keyboard_overlay: self.fixed.keyboard_overlay,
+            keyboard_overlay_duration_ms: Self::parse_or(
+                &self.fixed.keyboard_overlay_duration_ms,
+                framepipe::capture::key_overlay::DEFAULT_DISPLAY_DURATION_MS,
+            )
+            .max(1),
+            keyboard_overlay_fade_ms: Self::parse_or(
+                &self.fixed.keyboard_overlay_fade_ms,
+                framepipe::capture::key_overlay::DEFAULT_FADE_DURATION_MS,
+            )
+            .max(1),
+            keyboard_overlay_debounce_ms: Self::parse_or(
+                &self.fixed.keyboard_overlay_debounce_ms,
+                framepipe::capture::key_overlay::DEFAULT_DEBOUNCE_MS,
+            ),
+            keyboard_overlay_show_single_modifiers: self
+                .fixed
+                .keyboard_overlay_show_single_modifiers,
+            keyboard_overlay_font: self.fixed.keyboard_overlay_font.clone(),
             output_width: Self::parse_opt_u32(&self.fixed.output_width),
             output_height: Self::parse_opt_u32(&self.fixed.output_height),
             dump_frames: self.fixed.dump_frames,
@@ -815,6 +842,49 @@ impl App {
                 self.live.cursor_scale = v;
                 self.live.cursor_sprite_version = self.live.cursor_sprite_version.wrapping_add(1);
                 self.apply_live();
+                Task::none()
+            }
+            Message::KeyboardOverlayToggled(v) => {
+                self.fixed.keyboard_overlay = v;
+                self.mark_fixed_changed();
+                Task::none()
+            }
+            Message::KeyboardOverlayDurationEdited(v) => {
+                self.fixed.keyboard_overlay_duration_ms = v;
+                self.mark_fixed_changed();
+                Task::none()
+            }
+            Message::KeyboardOverlayFadeEdited(v) => {
+                self.fixed.keyboard_overlay_fade_ms = v;
+                self.mark_fixed_changed();
+                Task::none()
+            }
+            Message::KeyboardOverlayDebounceEdited(v) => {
+                self.fixed.keyboard_overlay_debounce_ms = v;
+                self.mark_fixed_changed();
+                Task::none()
+            }
+            Message::KeyboardOverlayShowSingleModifiersToggled(v) => {
+                self.fixed.keyboard_overlay_show_single_modifiers = v;
+                self.mark_fixed_changed();
+                Task::none()
+            }
+            Message::PickKeyboardOverlayFont => Task::future(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("Font", &["ttf", "otf"])
+                    .pick_file(),
+            )
+            .map(Message::KeyboardOverlayFontPicked),
+            Message::KeyboardOverlayFontPicked(handle) => {
+                if let Some(file) = handle {
+                    self.fixed.keyboard_overlay_font = Some(file.path().to_path_buf());
+                    self.mark_fixed_changed();
+                }
+                Task::none()
+            }
+            Message::KeyboardOverlayFontClear => {
+                self.fixed.keyboard_overlay_font = None;
+                self.mark_fixed_changed();
                 Task::none()
             }
             Message::HotkeysEnabledToggled(enabled) => {

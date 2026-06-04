@@ -13,11 +13,14 @@ use gayland::{
     start_tracker,
 };
 
-use crate::app::{
-    hotkeys::{HotkeyBinding, apply_action},
-    signals::CaptureControl,
-};
 use crate::shared::mouse_ring::{MouseEvent, RingBuffer};
+use crate::{
+    app::{
+        hotkeys::{HotkeyBinding, apply_action},
+        signals::CaptureControl,
+    },
+    shared::keyboard_ring::{KeyOverlayEvent, KeyboardOverlayRingBuffer},
+};
 
 #[derive(Clone)]
 pub struct TrackingControl {
@@ -68,6 +71,7 @@ pub fn init_wayland(
     control: TrackingControl,
     recording: MouseTrackRecordingInfo,
     ring: Option<Arc<RingBuffer>>,
+    keyboard_ring: Option<Arc<KeyboardOverlayRingBuffer>>,
     input_fds: Option<HashMap<PathBuf, OwnedFd>>,
     hotkeys: Vec<HotkeyBinding>,
     enable_layer_shell: bool,
@@ -88,9 +92,10 @@ pub fn init_wayland(
             )
         })?;
 
+    let enable_keyboard = keyboard_ring.is_some() || !hotkeys.is_empty();
     let mut runtime_config = GaylandConfig {
         enable_mouse: enable_layer_shell,
-        enable_keyboard: !hotkeys.is_empty(),
+        enable_keyboard,
         ..Default::default()
     };
     let mut hotkey_actions = HashMap::with_capacity(hotkeys.len());
@@ -152,6 +157,24 @@ pub fn init_wayland(
                         apply_action(action, &control.capture);
                     }
                 }
+                GaylandEvent::KeyboardKey {
+                    keycode,
+                    key_name,
+                    is_modifier,
+                    pressed,
+                    t_ns,
+                } => {
+                    if let Some(keyboard_ring) = &keyboard_ring {
+                        keyboard_ring.push(KeyOverlayEvent {
+                            t_ns,
+                            keycode,
+                            key_name: key_name.unwrap_or("unknown"),
+                            is_modifier,
+                            pressed,
+                        });
+                    }
+                }
+                // mouse pos sink, probably should move type out
                 event => {
                     if let Some(sink) = &mut sink {
                         sink.handle_event(event);

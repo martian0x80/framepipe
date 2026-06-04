@@ -98,6 +98,222 @@ impl App {
         .align_y(Alignment::Center)
     }
 
+    fn hotkey_card(&self, disabled: bool) -> Element<'_, Message> {
+        Self::card(
+            column![
+                Self::subsection_label("HOTKEYS"),
+                toggler(self.fixed.hotkeys_enabled)
+                    .label("Enable recording-time hotkeys")
+                    .on_toggle_maybe((!disabled).then_some(Message::HotkeysEnabledToggled)),
+                row![
+                    text("Stop"),
+                    text_input("Ctrl+Shift+Q", &self.fixed.hotkey_stop)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.hotkeys_enabled)
+                                .then_some(Message::HotkeyStopEdited),
+                        )
+                        .width(Length::Fill),
+                    App::btn("Save").on_press_maybe(
+                        (!disabled && self.fixed.hotkeys_enabled)
+                            .then_some(Message::ApplyHotkeyStop),
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
+                    text("Pause"),
+                    text_input("Ctrl+Shift+P", &self.fixed.hotkey_pause)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.hotkeys_enabled)
+                                .then_some(Message::HotkeyPauseEdited),
+                        )
+                        .width(Length::Fill),
+                    App::btn("Save").on_press_maybe(
+                        (!disabled && self.fixed.hotkeys_enabled)
+                            .then_some(Message::ApplyHotkeyPause),
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
+                    text("Resume"),
+                    text_input("Ctrl+Shift+R", &self.fixed.hotkey_resume)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.hotkeys_enabled)
+                                .then_some(Message::HotkeyResumeEdited),
+                        )
+                        .width(Length::Fill),
+                    App::btn("Save").on_press_maybe(
+                        (!disabled && self.fixed.hotkeys_enabled)
+                            .then_some(Message::ApplyHotkeyResume),
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
+                    text("Toggle"),
+                    text_input("Ctrl+Shift+Space", &self.fixed.hotkey_toggle_pause)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.hotkeys_enabled)
+                                .then_some(Message::HotkeyTogglePauseEdited),
+                        )
+                        .width(Length::Fill),
+                    App::btn("Save").on_press_maybe(
+                        (!disabled && self.fixed.hotkeys_enabled)
+                            .then_some(Message::ApplyHotkeyTogglePause),
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(8),
+        )
+    }
+
+    fn smooth_card(&self, disabled: bool) -> Element<'_, Message> {
+        Self::card({
+            let mut col = column![
+                Self::subsection_label("CURSOR SMOOTH"),
+                toggler(self.live.cursor_smooth)
+                    .label("Enable smooth cursor")
+                    .on_toggle_maybe((!disabled).then_some(Message::CursorSmoothToggled)),
+            ]
+            .spacing(8);
+
+            if self.live.cursor_smooth {
+                col = col
+                    .push(Self::slider_row(
+                        "Spring K",
+                        1.0..=800.0,
+                        self.live.cursor_spring_k,
+                        Message::CursorSpringKChanged,
+                        format!("{:.1}", self.live.cursor_spring_k),
+                    ))
+                    .push(Self::slider_row(
+                        "Spring D",
+                        1.0..=100.0,
+                        self.live.cursor_spring_d,
+                        Message::CursorSpringDChanged,
+                        format!("{:.1}", self.live.cursor_spring_d),
+                    ))
+                    .push(Self::slider_row(
+                        "Max speed",
+                        100.0..=10000.0,
+                        self.live.cursor_max_speed,
+                        Message::CursorMaxSpeedChanged,
+                        format!("{:.0}", self.live.cursor_max_speed),
+                    ))
+                    .push(Self::slider_row(
+                        "Snap px",
+                        0.0..=200.0,
+                        self.live.cursor_snap_px,
+                        Message::CursorSnapPxChanged,
+                        format!("{:.1}", self.live.cursor_snap_px),
+                    ))
+                    .push(Self::slider_row(
+                        "Smooth ms",
+                        1.0..=60.0,
+                        self.live.cursor_smooth_ms,
+                        Message::CursorSmoothMsChanged,
+                        format!("{:.1}", self.live.cursor_smooth_ms),
+                    ))
+                    .push(Self::slider_row(
+                        "Deadzone",
+                        0.0..=10.0,
+                        self.live.cursor_deadzone_px,
+                        Message::CursorDeadzonePxChanged,
+                        format!("{:.2}", self.live.cursor_deadzone_px),
+                    ));
+            }
+            col
+        })
+    }
+
+    fn slider_row(
+        label: &'static str,
+        range: std::ops::RangeInclusive<f32>,
+        value: f32,
+        on_change: impl Fn(f32) -> Message + 'static,
+        value_label: String,
+    ) -> iced::widget::Row<'static, Message> {
+        row![
+            text(label),
+            slider(range, value, on_change).width(Length::Fill),
+            text(value_label).width(Length::Fixed(56.0)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+    }
+
+    fn keyboard_overlay_card(&self, disabled: bool) -> Element<'_, Message> {
+        Self::card(
+            column![
+                Self::subsection_label("KEYBOARD OVERLAY"),
+                toggler(self.fixed.keyboard_overlay)
+                    .label("Show pressed keys on recording")
+                    .on_toggle_maybe((!disabled).then_some(Message::KeyboardOverlayToggled)),
+                row![
+                    text("Duration"),
+                    text_input("1200", &self.fixed.keyboard_overlay_duration_ms)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.keyboard_overlay)
+                                .then_some(Message::KeyboardOverlayDurationEdited),
+                        )
+                        .width(Length::Fixed(90.0)),
+                    text("ms"),
+                    text("Fade"),
+                    text_input("300", &self.fixed.keyboard_overlay_fade_ms)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.keyboard_overlay)
+                                .then_some(Message::KeyboardOverlayFadeEdited),
+                        )
+                        .width(Length::Fixed(90.0)),
+                    text("ms"),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
+                    text("Debounce"),
+                    text_input("50", &self.fixed.keyboard_overlay_debounce_ms)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.keyboard_overlay)
+                                .then_some(Message::KeyboardOverlayDebounceEdited),
+                        )
+                        .width(Length::Fixed(90.0)),
+                    text("ms per held key")
+                        .size(12)
+                        .color(Color::from_rgb(0.5, 0.5, 0.5)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                toggler(self.fixed.keyboard_overlay_show_single_modifiers)
+                    .label("Show modifier-only keys")
+                    .on_toggle_maybe(
+                        (!disabled && self.fixed.keyboard_overlay)
+                            .then_some(Message::KeyboardOverlayShowSingleModifiersToggled),
+                    ),
+                row![
+                    text("Font"),
+                    container(
+                        text(Self::short_path(self.fixed.keyboard_overlay_font.as_ref())).size(12)
+                    )
+                    .width(Length::Fill),
+                    App::btn("Pick Font").on_press_maybe(
+                        (!disabled && self.fixed.keyboard_overlay)
+                            .then_some(Message::PickKeyboardOverlayFont),
+                    ),
+                    App::btn("Bitmap").on_press_maybe(
+                        (!disabled && self.fixed.keyboard_overlay)
+                            .then_some(Message::KeyboardOverlayFontClear),
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(8),
+        )
+    }
+
     pub(super) fn configure_controls_panel(&self) -> Element<'_, Message> {
         let disabled = matches!(self.mode, crate::model::AppMode::Recording);
 
@@ -292,7 +508,15 @@ impl App {
             col
         });
 
-        let mut controls = column![capture_card, encoding_card, cursor_card,].spacing(8);
+        let mut controls = column![
+            capture_card,
+            encoding_card,
+            cursor_card,
+            self.smooth_card(disabled),
+            self.keyboard_overlay_card(disabled),
+            self.hotkey_card(disabled),
+        ]
+        .spacing(8);
 
         if self.fixed_dirty && !disabled {
             controls = controls.push(
@@ -551,182 +775,6 @@ impl App {
             .spacing(8),
         );
 
-        let hotkey_card = Self::card(
-            column![
-                Self::subsection_label("HOTKEYS"),
-                toggler(self.fixed.hotkeys_enabled)
-                    .label("Enable recording-time hotkeys")
-                    .on_toggle_maybe((!disabled).then_some(Message::HotkeysEnabledToggled)),
-                row![
-                    text("Stop"),
-                    text_input("Ctrl+Shift+Q", &self.fixed.hotkey_stop)
-                        .on_input_maybe(
-                            (!disabled && self.fixed.hotkeys_enabled)
-                                .then_some(Message::HotkeyStopEdited),
-                        )
-                        .width(Length::Fill),
-                    App::btn("Save").on_press_maybe(
-                        (!disabled && self.fixed.hotkeys_enabled)
-                            .then_some(Message::ApplyHotkeyStop),
-                    ),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                row![
-                    text("Pause"),
-                    text_input("Ctrl+Shift+P", &self.fixed.hotkey_pause)
-                        .on_input_maybe(
-                            (!disabled && self.fixed.hotkeys_enabled)
-                                .then_some(Message::HotkeyPauseEdited),
-                        )
-                        .width(Length::Fill),
-                    App::btn("Save").on_press_maybe(
-                        (!disabled && self.fixed.hotkeys_enabled)
-                            .then_some(Message::ApplyHotkeyPause),
-                    ),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                row![
-                    text("Resume"),
-                    text_input("Ctrl+Shift+R", &self.fixed.hotkey_resume)
-                        .on_input_maybe(
-                            (!disabled && self.fixed.hotkeys_enabled)
-                                .then_some(Message::HotkeyResumeEdited),
-                        )
-                        .width(Length::Fill),
-                    App::btn("Save").on_press_maybe(
-                        (!disabled && self.fixed.hotkeys_enabled)
-                            .then_some(Message::ApplyHotkeyResume),
-                    ),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                row![
-                    text("Toggle"),
-                    text_input("Ctrl+Shift+Space", &self.fixed.hotkey_toggle_pause)
-                        .on_input_maybe(
-                            (!disabled && self.fixed.hotkeys_enabled)
-                                .then_some(Message::HotkeyTogglePauseEdited),
-                        )
-                        .width(Length::Fill),
-                    App::btn("Save").on_press_maybe(
-                        (!disabled && self.fixed.hotkeys_enabled)
-                            .then_some(Message::ApplyHotkeyTogglePause),
-                    ),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-            ]
-            .spacing(8),
-        );
-
-        // ── Cursor effects card (smooth) ─────────────────────────────────
-        let smooth_card = Self::card({
-            let mut col = column![
-                Self::subsection_label("CURSOR SMOOTH"),
-                toggler(self.live.cursor_smooth)
-                    .label("Enable smooth cursor")
-                    .on_toggle_maybe((!disabled).then_some(Message::CursorSmoothToggled)),
-            ]
-            .spacing(8);
-
-            if self.live.cursor_smooth {
-                col = col
-                    .push(
-                        row![
-                            text("Spring K"),
-                            slider(
-                                1.0..=800.0,
-                                self.live.cursor_spring_k,
-                                Message::CursorSpringKChanged
-                            )
-                            .width(Length::Fill),
-                            text(format!("{:.1}", self.live.cursor_spring_k))
-                                .width(Length::Fixed(56.0)),
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center),
-                    )
-                    .push(
-                        row![
-                            text("Spring D"),
-                            slider(
-                                1.0..=100.0,
-                                self.live.cursor_spring_d,
-                                Message::CursorSpringDChanged
-                            )
-                            .width(Length::Fill),
-                            text(format!("{:.1}", self.live.cursor_spring_d))
-                                .width(Length::Fixed(56.0)),
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center),
-                    )
-                    .push(
-                        row![
-                            text("Max speed"),
-                            slider(
-                                100.0..=10000.0,
-                                self.live.cursor_max_speed,
-                                Message::CursorMaxSpeedChanged
-                            )
-                            .width(Length::Fill),
-                            text(format!("{:.0}", self.live.cursor_max_speed))
-                                .width(Length::Fixed(56.0)),
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center),
-                    )
-                    .push(
-                        row![
-                            text("Snap px"),
-                            slider(
-                                0.0..=200.0,
-                                self.live.cursor_snap_px,
-                                Message::CursorSnapPxChanged
-                            )
-                            .width(Length::Fill),
-                            text(format!("{:.1}", self.live.cursor_snap_px))
-                                .width(Length::Fixed(56.0)),
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center),
-                    )
-                    .push(
-                        row![
-                            text("Smooth ms"),
-                            slider(
-                                1.0..=60.0,
-                                self.live.cursor_smooth_ms,
-                                Message::CursorSmoothMsChanged
-                            )
-                            .width(Length::Fill),
-                            text(format!("{:.1}", self.live.cursor_smooth_ms))
-                                .width(Length::Fixed(56.0)),
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center),
-                    )
-                    .push(
-                        row![
-                            text("Deadzone"),
-                            slider(
-                                0.0..=10.0,
-                                self.live.cursor_deadzone_px,
-                                Message::CursorDeadzonePxChanged
-                            )
-                            .width(Length::Fill),
-                            text(format!("{:.2}", self.live.cursor_deadzone_px))
-                                .width(Length::Fixed(56.0)),
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center),
-                    );
-            }
-            col
-        });
-
         // ── Cursor effects card (smear) ──────────────────────────────────
         let smear_card = Self::card({
             let mut col = column![
@@ -909,12 +957,9 @@ impl App {
             row![debug_card, theme_card,]
                 .spacing(10)
                 .width(Length::Fill),
-            hotkey_card,
             Self::inset_divider(),
             Self::section_heading("Live Effects"),
-            row![smooth_card, smear_card,]
-                .spacing(10)
-                .width(Length::Fill),
+            smear_card,
         ]
         .spacing(10);
 
