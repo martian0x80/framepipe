@@ -693,7 +693,10 @@ mod tests {
     #[test]
     fn modifier_only_keys_can_be_shown() {
         let now = Instant::now();
-        let config = KeyOverlayConfig { show_single_modifiers: true, ..Default::default() };
+        let config = KeyOverlayConfig {
+            show_single_modifiers: true,
+            ..Default::default()
+        };
         let mut state = KeyOverlayState::new(config);
 
         state.ingest(key(29, "LeftCtrl", true, true), now);
