@@ -12,6 +12,7 @@ pub struct CaptureControl {
     pub pause_req: Arc<AtomicBool>,
     pub resume_req: Arc<AtomicBool>,
     pub paused: Arc<AtomicBool>,
+    pub save_replay_buffer_req: Arc<AtomicBool>,
 }
 
 impl CaptureControl {
@@ -21,6 +22,7 @@ impl CaptureControl {
             pause_req: Arc::new(AtomicBool::new(false)),
             resume_req: Arc::new(AtomicBool::new(false)),
             paused: Arc::new(AtomicBool::new(false)),
+            save_replay_buffer_req: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -35,7 +37,6 @@ impl CaptureControl {
             .map_err(|e| format!("failed to register SIGUSR1: {e}"))?;
         signal_flag::register(SIGUSR2, Arc::clone(&control.resume_req))
             .map_err(|e| format!("failed to register SIGUSR2: {e}"))?;
-
         Ok(control)
     }
 
@@ -44,6 +45,7 @@ impl CaptureControl {
         self.pause_req.store(false, Ordering::Relaxed);
         self.resume_req.store(false, Ordering::Relaxed);
         self.paused.store(false, Ordering::Relaxed);
+        self.save_replay_buffer_req.store(false, Ordering::Relaxed);
     }
 
     pub fn request_stop(&self) {
@@ -56,5 +58,9 @@ impl CaptureControl {
 
     pub fn request_resume(&self) {
         self.resume_req.store(true, Ordering::Relaxed);
+    }
+
+    pub fn request_save_replay_buffer(&self) {
+        self.save_replay_buffer_req.store(true, Ordering::Relaxed);
     }
 }

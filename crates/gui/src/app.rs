@@ -7,14 +7,15 @@ mod ui;
 
 use framepipe::app::cli::CaptureArgs;
 use framepipe::app::hotkeys::{HotkeyAction, HotkeyBinding};
-use framepipe::drm_kms::types::LiveSettings;
+use framepipe::drm_kms::types::{CaptureOutput, LiveSettings};
 use framepipe::embedded_preview::EmbeddedPreviewSession;
 use framepipe::utils::tray::{TrayCallbacks, TrayController, spawn_tray};
 use iced::{Subscription, Task, Theme};
 
 use crate::model::{
     AppMode, BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
-    FixedOptions, FrameRateModeChoice, ProfileChoice, QualityChoice, SourceChoice, UiPage,
+    FixedOptions, FrameRateModeChoice, OutputContainerChoice, ProfileChoice, QualityChoice,
+    SourceChoice, UiPage,
 };
 use crate::preview_shader::PreviewProgram;
 
@@ -24,7 +25,9 @@ pub enum Message {
     TogglePreview,
     RestartPreview,
     StartRecording,
+    StartReplayBuffer,
     StopRecording,
+    SaveReplayBuffer,
 
     ThemeChanged(Theme),
 
@@ -66,11 +69,15 @@ pub enum Message {
     HotkeyPauseEdited(String),
     HotkeyResumeEdited(String),
     HotkeyTogglePauseEdited(String),
+    HotkeySaveReplayBufferEdited(String),
     ApplyHotkeyStop,
     ApplyHotkeyPause,
     ApplyHotkeyResume,
     ApplyHotkeyTogglePause,
+    ApplyHotkeySaveReplayBuffer,
 
+    OutputContainerChanged(OutputContainerChoice),
+    ReplaySecondsEdited(String),
     PickOutputPath,
     OutputPathPicked(Option<rfd::FileHandle>),
     OutputPathCleared,
@@ -139,6 +146,7 @@ pub struct App {
     signal_control: framepipe::app::signals::CaptureControl,
     record_control: Option<framepipe::app::signals::CaptureControl>,
     record_thread: Option<std::thread::JoinHandle<Result<(), String>>>,
+    replay_recording: bool,
     preview_control: Option<framepipe::app::signals::CaptureControl>,
     paused: bool,
     total_paused_duration: std::time::Duration,
@@ -186,6 +194,7 @@ impl App {
             signal_control,
             record_control: None,
             record_thread: None,
+            replay_recording: false,
             preview_control: None,
             paused: false,
             total_paused_duration: std::time::Duration::ZERO,
@@ -305,6 +314,7 @@ impl App {
             dump_frames: self.fixed.dump_frames,
             dump_dir: self.fixed.dump_dir.clone(),
             dump_every: Self::parse_or(&self.fixed.dump_every, 30_u32).max(1),
+            output_container: self.fixed.output_container.to_container(),
             bitrate_kbps: Self::parse_or(&self.fixed.bitrate_input, 15000_u32).max(1),
             frame_rate_mode: self.fixed.frame_rate_mode.to_mode(),
             bitrate_mode: self.fixed.bitrate_mode.to_mode(),
@@ -387,6 +397,63 @@ impl App {
         }
     }
 
+    fn default_output_path(&self, prefix: &str) -> PathBuf {
+        let fmt = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+        let filename = format!("{prefix}_{fmt}.{}", self.fixed.output_container.extension());
+        if let Some(mut dir) = dirs::video_dir() {
+            dir.push(filename);
+            dir
+        } else {
+            PathBuf::from(filename)
+        }
+    }
+
+    fn start_capture_output(&mut self, output: CaptureOutput, replay: bool) {
+        self.page = UiPage::Record;
+        self.stop_preview_session();
+        if self.preview_join_thread.is_some() {
+            self.status = "Waiting for preview teardown before recording…".to_string();
+            return;
+        }
+
+        let output_path = match &output {
+            CaptureOutput::File(path) | CaptureOutput::ReplayBuffer(path, _) => path.clone(),
+            CaptureOutput::Preview | CaptureOutput::EmbeddedPreview => PathBuf::new(),
+        };
+        let session_control = framepipe::app::signals::CaptureControl::new_unregistered();
+        let control = session_control.clone();
+
+        let args = self.build_capture_args();
+        let backend = args.capture_backend;
+
+        match framepipe::app::config::build_capture_options(args, output) {
+            Ok(options) => {
+                self.mode = AppMode::Recording;
+                self.replay_recording = replay;
+                self.record_started_at = Some(Instant::now());
+                self.total_paused_duration = std::time::Duration::ZERO;
+                self.pause_start = None;
+                self.status = if replay {
+                    format!(
+                        "Replay buffer running, save target {}",
+                        output_path.display()
+                    )
+                } else {
+                    format!("Recording to {}", output_path.display())
+                };
+                self.record_control = Some(control.clone());
+                self.record_thread = Some(std::thread::spawn(move || {
+                    framepipe::app::app::RecordingSession::new(options, backend)
+                        .and_then(|s| s.run(control))
+                        .map_err(|e| e.to_string())
+                }));
+            }
+            Err(e) => {
+                self.status = format!("Failed to start recording: {e}");
+            }
+        }
+    }
+
     fn recording_elapsed(&self) -> String {
         if let Some(start) = self.record_started_at {
             let mut duration = start.elapsed();
@@ -401,6 +468,35 @@ impl App {
             format!("{h:02}:{m:02}:{s:02}")
         } else {
             "00:00:00".to_string()
+        }
+    }
+
+    fn sync_recording_pause_state(&mut self) {
+        let Some(control) = &self.record_control else {
+            return;
+        };
+        let actual = control.paused.load(std::sync::atomic::Ordering::Relaxed);
+        if actual == self.paused {
+            return;
+        }
+
+        self.paused = actual;
+        if actual {
+            self.pause_start.get_or_insert_with(Instant::now);
+            self.status = if self.replay_recording {
+                "Replay buffer paused".to_string()
+            } else {
+                "Recording paused".to_string()
+            };
+        } else {
+            if let Some(ps) = self.pause_start.take() {
+                self.total_paused_duration += ps.elapsed();
+            }
+            self.status = if self.replay_recording {
+                "Replay buffer resumed".to_string()
+            } else {
+                "Recording resumed".to_string()
+            };
         }
     }
 
@@ -457,6 +553,7 @@ impl App {
                 .and_then(|v| v);
             self.record_started_at = None;
             self.record_control = None;
+            self.replay_recording = false;
             self.paused = false;
             self.total_paused_duration = std::time::Duration::ZERO;
             self.pause_start = None;
@@ -515,6 +612,11 @@ impl App {
             &mut bindings,
             HotkeyAction::TogglePause,
             &self.fixed.hotkey_toggle_pause,
+        )?;
+        push_hotkey_binding(
+            &mut bindings,
+            HotkeyAction::SaveReplayBuffer,
+            &self.fixed.hotkey_save_replay_buffer,
         )?;
         Ok(bindings)
     }
@@ -599,6 +701,7 @@ impl App {
                 self.ui_tick = self.ui_tick.wrapping_add(1);
                 self.poll_background_threads();
                 self.process_tray_commands();
+                self.sync_recording_pause_state();
                 self.sync_tray_state();
 
                 // Handle SIGINT/SIGTERM: gracefully shut down and exit the GUI.
@@ -636,50 +739,22 @@ impl App {
                 Task::none()
             }
             Message::StartRecording => {
-                self.page = UiPage::Record;
-                self.stop_preview_session();
-                if self.preview_join_thread.is_some() {
-                    self.status = "Waiting for preview teardown before recording…".to_string();
-                    return Task::none();
-                }
-                let output = self.fixed.output_path.clone().unwrap_or_else(|| {
-                    let fmt = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-                    let filename = format!("framepipe_record_{}.mp4", fmt);
-                    if let Some(mut dir) = dirs::video_dir() {
-                        dir.push(filename);
-                        dir
-                    } else {
-                        std::path::PathBuf::from(filename)
-                    }
-                });
-
-                let session_control = framepipe::app::signals::CaptureControl::new_unregistered();
-                let control = session_control.clone();
-
-                let args = self.build_capture_args();
-                let backend = args.capture_backend;
-
-                match framepipe::app::config::build_capture_options(
-                    args,
-                    framepipe::drm_kms::types::CaptureOutput::File(output.clone()),
-                ) {
-                    Ok(options) => {
-                        self.mode = AppMode::Recording;
-                        self.record_started_at = Some(Instant::now());
-                        self.total_paused_duration = std::time::Duration::ZERO;
-                        self.pause_start = None;
-                        self.status = format!("Recording to {}", output.display());
-                        self.record_control = Some(control.clone());
-                        self.record_thread = Some(std::thread::spawn(move || {
-                            framepipe::app::app::RecordingSession::new(options, backend)
-                                .and_then(|s| s.run(control))
-                                .map_err(|e| e.to_string())
-                        }));
-                    }
-                    Err(e) => {
-                        self.status = format!("Failed to start recording: {}", e);
-                    }
-                }
+                let output = self
+                    .fixed
+                    .output_path
+                    .clone()
+                    .unwrap_or_else(|| self.default_output_path("framepipe_record"));
+                self.start_capture_output(CaptureOutput::File(output), false);
+                Task::none()
+            }
+            Message::StartReplayBuffer => {
+                let output = self
+                    .fixed
+                    .output_path
+                    .clone()
+                    .unwrap_or_else(|| self.default_output_path("framepipe_replay"));
+                let seconds = Self::parse_or(&self.fixed.replay_seconds, 30_u32).max(1);
+                self.start_capture_output(CaptureOutput::ReplayBuffer(output, seconds), true);
                 Task::none()
             }
             Message::StopRecording => {
@@ -694,6 +769,13 @@ impl App {
                         .map(|p| p.to_string_lossy().into_owned())
                         .unwrap_or_else(|| "Dynamic".to_string())
                 );
+                Task::none()
+            }
+            Message::SaveReplayBuffer => {
+                if let Some(control) = &self.record_control {
+                    control.request_save_replay_buffer();
+                    self.status = "Replay save requested".to_string();
+                }
                 Task::none()
             }
             Message::GoToConfigurePage => {
@@ -912,21 +994,48 @@ impl App {
                 self.fixed.hotkey_toggle_pause = v;
                 Task::none()
             }
+            Message::HotkeySaveReplayBufferEdited(v) => {
+                self.fixed.hotkey_save_replay_buffer = v;
+                Task::none()
+            }
             Message::ApplyHotkeyStop
             | Message::ApplyHotkeyPause
             | Message::ApplyHotkeyResume
-            | Message::ApplyHotkeyTogglePause => {
+            | Message::ApplyHotkeyTogglePause
+            | Message::ApplyHotkeySaveReplayBuffer => {
                 self.status = match self.configured_hotkeys() {
                     Ok(bindings) => format!("Saved {} recording-time hotkeys", bindings.len()),
                     Err(e) => format!("Invalid hotkey: {e}"),
                 };
                 Task::none()
             }
+            Message::OutputContainerChanged(container) => {
+                self.fixed.output_container = container;
+                if let Some(path) = &mut self.fixed.output_path {
+                    let ext = path
+                        .extension()
+                        .and_then(|v| v.to_str())
+                        .map(str::to_ascii_lowercase);
+                    if matches!(ext.as_deref(), Some("mp4" | "mkv" | "matroska")) {
+                        path.set_extension(container.extension());
+                    }
+                }
+                self.mark_fixed_changed();
+                Task::none()
+            }
+            Message::ReplaySecondsEdited(v) => {
+                self.fixed.replay_seconds = v;
+                self.mark_fixed_changed();
+                Task::none()
+            }
 
             Message::PickOutputPath => Task::future(
                 rfd::AsyncFileDialog::new()
                     .add_filter("Video", &["mp4", "mkv"])
-                    .set_file_name("output.mp4")
+                    .set_file_name(format!(
+                        "output.{}",
+                        self.fixed.output_container.extension()
+                    ))
                     .save_file(),
             )
             .map(Message::OutputPathPicked),
@@ -1175,5 +1284,6 @@ impl Drop for App {
         if let Some(handle) = self.record_thread.take() {
             let _ = handle.join();
         }
+        self.replay_recording = false;
     }
 }

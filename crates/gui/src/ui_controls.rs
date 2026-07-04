@@ -1,7 +1,7 @@
 use crate::app::{App, Message};
 use crate::model::{
     AppMode, BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
-    FrameRateModeChoice, ProfileChoice, QualityChoice, SourceChoice,
+    FrameRateModeChoice, OutputContainerChoice, ProfileChoice, QualityChoice, SourceChoice,
 };
 use crate::theme::get_all_themes;
 use iced::widget::scrollable::Scrollbar;
@@ -78,19 +78,26 @@ impl App {
     }
 
     fn output_path_row(&self, disabled: bool) -> iced::widget::Row<'_, Message> {
+        let ext = self.fixed.output_container.extension();
         row![
             text("Output"),
             container(
                 text(match &self.fixed.output_path {
                     Some(path) => Self::short_path(Some(path)),
                     None => match dirs::video_dir() {
-                        Some(v) => format!("{}/framepipe_record_<time>.mp4", v.display()),
-                        None => "framepipe_record_<time>.mp4".to_string(),
+                        Some(v) => format!("{}/framepipe_record_<time>.{ext}", v.display()),
+                        None => format!("framepipe_record_<time>.{ext}"),
                     },
                 })
                 .size(13)
             )
             .width(Length::Fill),
+            pick_list(
+                &OutputContainerChoice::ALL[..],
+                Some(self.fixed.output_container),
+                Message::OutputContainerChanged,
+            )
+            .width(Length::Fixed(92.0)),
             App::btn("Browse").on_press_maybe((!disabled).then_some(Message::PickOutputPath)),
             App::btn("Clear").on_press_maybe((!disabled).then_some(Message::OutputPathCleared)),
         ]
@@ -161,6 +168,21 @@ impl App {
                     App::btn("Save").on_press_maybe(
                         (!disabled && self.fixed.hotkeys_enabled)
                             .then_some(Message::ApplyHotkeyTogglePause),
+                    ),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
+                    text("Replay"),
+                    text_input("Ctrl+Shift+S", &self.fixed.hotkey_save_replay_buffer)
+                        .on_input_maybe(
+                            (!disabled && self.fixed.hotkeys_enabled)
+                                .then_some(Message::HotkeySaveReplayBufferEdited),
+                        )
+                        .width(Length::Fill),
+                    App::btn("Save").on_press_maybe(
+                        (!disabled && self.fixed.hotkeys_enabled)
+                            .then_some(Message::ApplyHotkeySaveReplayBuffer),
                     ),
                 ]
                 .spacing(8)
@@ -401,6 +423,14 @@ impl App {
                 .align_y(Alignment::Center),
                 self.output_path_row(disabled),
                 row![
+                    text("Replay seconds"),
+                    text_input("30", &self.fixed.replay_seconds)
+                        .on_input_maybe((!disabled).then_some(Message::ReplaySecondsEdited))
+                        .width(Length::Fixed(90.0)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
                     toggler(self.live.background_enabled)
                         .label("Background")
                         .on_toggle_maybe((!disabled).then_some(Message::BackgroundToggled)),
@@ -572,7 +602,7 @@ impl App {
         let paused = self.paused;
 
         let action_card = Self::card(if recording {
-            column![
+            let mut col = column![
                 button(
                     container(text("Stop Recording").size(22).font(iced::Font {
                         weight: iced::font::Weight::Bold,
@@ -611,8 +641,27 @@ impl App {
                     s
                 })
                 .on_press(Message::TogglePauseRecording),
-            ]
-            .spacing(8)
+            ];
+            if self.replay_recording {
+                col = col.push(
+                    button(
+                        container(text("Save Replay").size(16).font(iced::Font {
+                            weight: iced::font::Weight::Bold,
+                            ..Default::default()
+                        }))
+                        .center_x(Length::Fill),
+                    )
+                    .padding([10, 16])
+                    .width(Length::Fill)
+                    .style(|theme, status| {
+                        let mut s = button::primary(theme, status);
+                        s.border.radius = 10.0.into();
+                        s
+                    })
+                    .on_press(Message::SaveReplayBuffer),
+                );
+            }
+            col.spacing(8)
         } else {
             column![
                 button(
@@ -630,6 +679,21 @@ impl App {
                     s
                 })
                 .on_press(Message::StartRecording),
+                button(
+                    container(text("Start Replay Buffer").size(18).font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..Default::default()
+                    }))
+                    .center_x(Length::Fill),
+                )
+                .padding([12, 18])
+                .width(Length::Fill)
+                .style(|theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border.radius = 10.0.into();
+                    s
+                })
+                .on_press(Message::StartReplayBuffer),
             ]
             .spacing(8)
         });

@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::path::Path;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
@@ -11,9 +13,11 @@ use gstreamer_video::DownstreamForceKeyUnitEvent;
 
 use crate::drm_kms::gstreamer::{ExportError, push_exported_dmabuf};
 use crate::drm_kms::types::{
-    BitrateMode, ColorRange, Colorimetry, EncoderBackend, ExportedDmabuf, FrameRateMode, Profile,
-    QualityPreset, VideoCodec,
+    BitrateMode, ColorRange, Colorimetry, EncoderBackend, ExportedDmabuf, FrameRateMode,
+    OutputContainer, Profile, QualityPreset, VideoCodec,
 };
+
+use super::replay_buffer::ReplayBuffer;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EncodeError {
@@ -23,12 +27,16 @@ pub enum EncodeError {
     Parse(#[from] glib::BoolError),
     #[error("missing appsrc")]
     MissingAppSrc,
+    #[error("missing appsink")]
+    MissingAppSink,
     #[error("push failed: {0}")]
     Push(#[from] ExportError),
     #[error("bus error: {0}")]
     Bus(String),
     #[error("invalid encoder configuration: {0}")]
     InvalidConfig(String),
+    #[error("replay buffer error: {0}")]
+    Replay(String),
 }
 
 pub struct GstEncoder {
@@ -43,11 +51,13 @@ pub struct GstEncoder {
     paused_total_ns: u64,
     last_pts_ns: Option<u64>,
     last_push_wall: Option<Instant>,
+    replay: Option<Arc<Mutex<ReplayBuffer>>>,
 }
 
 pub enum EncoderOutput<'a> {
     File(&'a str),
     Preview,
+    ReplayBuffer { seconds: u32 },
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +71,7 @@ pub struct EncoderOptions {
     pub colorimetry: Colorimetry,
     pub encoder_backend: EncoderBackend,
     pub video_codec: VideoCodec,
+    pub output_container: OutputContainer,
     pub profile: Option<Profile>,
 }
 
@@ -1142,17 +1153,18 @@ impl GstEncoder {
             }
         };
 
-        let desc = match output {
+        let desc = match &output {
             EncoderOutput::File(out_path) => format!(
                 concat!(
                     "appsrc name=src is-live=true format=time do-timestamp=false block=true ",
                     "! queue max-size-buffers={ring} max-size-bytes=0 max-size-time=0 ",
                     "{encode_chain}",
-                    "! mp4mux faststart=true ",
+                    "{mux_chain}",
                     "! filesink location={out}"
                 ),
                 ring = ring_slots,
                 encode_chain = encode_chain,
+                mux_chain = options.output_container.mux_chain(),
                 out = out_path
             ),
             EncoderOutput::Preview => format!(
@@ -1167,6 +1179,16 @@ impl GstEncoder {
                 ring = ring_slots,
                 encode_chain = encode_chain,
                 decoder = decoder
+            ),
+            EncoderOutput::ReplayBuffer { seconds: _ } => format!(
+                concat!(
+                    "appsrc name=src is-live=true format=time do-timestamp=false block=true ",
+                    "! queue max-size-buffers={ring} max-size-bytes=0 max-size-time=0 ",
+                    "{encode_chain}",
+                    "! appsink name=replay_sink emit-signals=false sync=false max-buffers=0 drop=false"
+                ),
+                ring = ring_slots,
+                encode_chain = encode_chain,
             ),
         };
         log::debug!("GStreamer pipeline: {desc}");
@@ -1192,6 +1214,39 @@ impl GstEncoder {
         appsrc.set_is_live(true);
         appsrc.set_do_timestamp(false);
         appsrc.set_format(gst::Format::Time);
+
+        let replay = if let EncoderOutput::ReplayBuffer { seconds } = output {
+            let appsink = pipeline
+                .by_name("replay_sink")
+                .ok_or(EncodeError::MissingAppSink)?
+                .downcast::<gst_app::AppSink>()
+                .map_err(|_| EncodeError::MissingAppSink)?;
+            let replay = Arc::new(Mutex::new(ReplayBuffer::new(
+                seconds,
+                options.video_codec.clone(),
+                options.output_container,
+            )));
+            let replay_for_cb = Arc::clone(&replay);
+            appsink.set_callbacks(
+                gst_app::AppSinkCallbacks::builder()
+                    .new_sample(move |sink| {
+                        let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                        match replay_for_cb.lock() {
+                            Ok(mut replay) => {
+                                if let Err(e) = replay.push_sample(&sample) {
+                                    log::warn!("failed to store replay packet: {e}");
+                                }
+                            }
+                            Err(e) => log::warn!("replay buffer lock poisoned: {e}"),
+                        }
+                        Ok(gst::FlowSuccess::Ok)
+                    })
+                    .build(),
+            );
+            Some(replay)
+        } else {
+            None
+        };
 
         pipeline
             .set_state(gst::State::Playing)
@@ -1230,6 +1285,7 @@ impl GstEncoder {
             paused_total_ns: 0,
             last_pts_ns: None,
             last_push_wall: None,
+            replay,
         })
     }
 
@@ -1313,6 +1369,16 @@ impl GstEncoder {
         } else {
             log::warn!("Failed to request force keyframe ({reason})");
         }
+    }
+
+    pub fn save_replay_buffer(&self, path: &Path) -> Result<(), EncodeError> {
+        let replay = self.replay.as_ref().ok_or_else(|| {
+            EncodeError::Replay("encoder is not in replay-buffer mode".to_string())
+        })?;
+        replay
+            .lock()
+            .map_err(|e| EncodeError::Replay(format!("replay buffer lock poisoned: {e}")))?
+            .save_snapshot(path)
     }
 
     pub fn pause(&mut self) {

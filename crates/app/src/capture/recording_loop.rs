@@ -30,6 +30,20 @@ use crate::drm_kms::egl_context::{
     EglCtx, EglError, delete_gl_texture, import_capture_frame_texture, init_egl,
 };
 
+fn replay_save_path(base: &std::path::Path, frame_idx: u64) -> PathBuf {
+    let stem = base
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .filter(|v| !v.is_empty())
+        .unwrap_or("framepipe_replay");
+    let stamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S%.3f");
+    let name = match base.extension().and_then(|v| v.to_str()) {
+        Some(ext) if !ext.is_empty() => format!("{stem}_{stamp}_{frame_idx}.{ext}"),
+        _ => format!("{stem}_{stamp}_{frame_idx}"),
+    };
+    base.with_file_name(name)
+}
+
 pub fn run_capture_session(
     options: CaptureOptions,
     control: CaptureControl,
@@ -77,13 +91,8 @@ pub fn run_capture_session(
             .unwrap_or(0);
         let recording_info = MouseTrackRecordingInfo {
             started_unix_ms,
-            output_path: match &options.output {
-                // CaptureOutput::File(path) => Some(path.to_string_lossy().into_owned()),
-                // disabling this for now, since we don't really have a use case for it yet
-                CaptureOutput::File(_) => None,
-                CaptureOutput::Preview => None,
-                CaptureOutput::EmbeddedPreview => None,
-            },
+            // disabling this for now, since we don't really have a use case for it yet
+            output_path: None,
             card_path: Some(options.card_path.clone()),
             connector: options.connector.clone(),
             fps: Some(options.fps),
@@ -137,6 +146,7 @@ pub fn run_capture_session(
         CaptureOutput::File(_) => ProcessState::Running,
         CaptureOutput::Preview => ProcessState::Preview,
         CaptureOutput::EmbeddedPreview => ProcessState::Preview,
+        CaptureOutput::ReplayBuffer(_, _) => ProcessState::Running,
     };
     let _ = backend.send_notification(pstate, 1);
     let mut first_frame = None;
@@ -199,6 +209,7 @@ pub fn run_capture_session(
         colorimetry: options.colorimetry,
         encoder_backend: options.encoder_backend,
         video_codec: options.video_codec,
+        output_container: options.output_container,
         profile: options.profile,
     };
 
@@ -355,6 +366,14 @@ pub fn run_capture_session(
             crate::encode::GstEncoder::new(&path.to_string_lossy(), ex, enc_opts.clone())
                 .map_err(|e| EglError::Pipeline(e.to_string()))?,
         ),
+        (CaptureOutput::ReplayBuffer(_, seconds), Some(ex)) => Some(
+            crate::encode::GstEncoder::new_with_output(
+                crate::encode::EncoderOutput::ReplayBuffer { seconds: *seconds },
+                ex,
+                enc_opts.clone(),
+            )
+            .map_err(|e| EglError::Pipeline(e.to_string()))?,
+        ),
         _ => {
             return Err(EglError::Pipeline(
                 "missing first exported dmabuf for encoder init".to_string(),
@@ -488,6 +507,20 @@ pub fn run_capture_session(
             // and the next iteration will calculate "too late" and grind the CPU
             // to catch up
             next_deadline = Instant::now() + frame_period;
+        }
+        if control
+            .save_replay_buffer_req
+            .swap(false, Ordering::Relaxed)
+        {
+            if let (CaptureOutput::ReplayBuffer(path, _), Some(enc)) = (&options.output, &encoder) {
+                let save_path = replay_save_path(path, frame_idx);
+                match enc.save_replay_buffer(&save_path) {
+                    Ok(()) => log::info!("Replay buffer saved to {}", save_path.display()),
+                    Err(e) => log::warn!("Failed to save replay buffer: {e}"),
+                }
+            } else {
+                log::warn!("Save replay requested outside replay-buffer output mode");
+            }
         }
         if control.paused.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(100));
@@ -863,6 +896,15 @@ pub fn run_capture_session(
                 "Video encoding complete, output saved to {}",
                 path.to_string_lossy()
             );
+            backend
+                .send_notification(
+                    ProcessState::Stopped(Some(path.to_string_lossy().into())),
+                    3,
+                )
+                .ok();
+        }
+        CaptureOutput::ReplayBuffer(path, _) => {
+            log::info!("Replay buffer stopped, save base was {}", path.display());
             backend
                 .send_notification(
                     ProcessState::Stopped(Some(path.to_string_lossy().into())),

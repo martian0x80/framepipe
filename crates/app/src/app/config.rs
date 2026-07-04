@@ -40,6 +40,7 @@ pub fn build_capture_options(
         dump_dir: capture.dump_dir,
         dump_every: capture.dump_every,
         output,
+        output_container: capture.output_container,
         bitrate_kbps: capture.bitrate_kbps,
         frame_rate_mode: capture.frame_rate_mode,
         bitrate_mode: capture.bitrate_mode,

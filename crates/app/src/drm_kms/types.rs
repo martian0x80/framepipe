@@ -212,6 +212,38 @@ pub enum CaptureOutput {
     File(PathBuf),
     Preview,
     EmbeddedPreview,
+    ReplayBuffer(PathBuf, u32),
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+pub enum OutputContainer {
+    Mp4,
+    Mkv,
+}
+
+impl OutputContainer {
+    pub fn extension(self) -> &'static str {
+        match self {
+            OutputContainer::Mp4 => "mp4",
+            OutputContainer::Mkv => "mkv",
+        }
+    }
+
+    pub fn mux_chain(self) -> &'static str {
+        match self {
+            OutputContainer::Mp4 => "! mp4mux faststart=true ",
+            OutputContainer::Mkv => "! matroskamux ",
+        }
+    }
+}
+
+impl Display for OutputContainer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OutputContainer::Mp4 => write!(f, "mp4"),
+            OutputContainer::Mkv => write!(f, "mkv"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -226,6 +258,7 @@ pub struct CaptureOptions {
     pub dump_dir: PathBuf,
     pub dump_every: u32,
     pub output: CaptureOutput,
+    pub output_container: OutputContainer,
     pub bitrate_kbps: u32,
     pub frame_rate_mode: FrameRateMode,
     pub bitrate_mode: BitrateMode,

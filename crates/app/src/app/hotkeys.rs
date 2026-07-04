@@ -10,6 +10,7 @@ pub enum HotkeyAction {
     Pause,
     Resume,
     TogglePause,
+    SaveReplayBuffer,
 }
 
 impl FromStr for HotkeyAction {
@@ -21,6 +22,9 @@ impl FromStr for HotkeyAction {
             "pause" => Ok(Self::Pause),
             "resume" => Ok(Self::Resume),
             "toggle-pause" | "toggle_pause" | "togglepause" => Ok(Self::TogglePause),
+            "save-replay-buffer" | "save_replay_buffer" | "savereplaybuffer" => {
+                Ok(Self::SaveReplayBuffer)
+            }
             other => Err(format!("unknown hotkey action '{other}'")),
         }
     }
@@ -55,6 +59,7 @@ impl std::fmt::Display for HotkeyAction {
             HotkeyAction::Pause => write!(f, "pause"),
             HotkeyAction::Resume => write!(f, "resume"),
             HotkeyAction::TogglePause => write!(f, "toggle-pause"),
+            HotkeyAction::SaveReplayBuffer => write!(f, "save-replay-buffer"),
         }
     }
 }
@@ -70,6 +75,9 @@ pub fn apply_action(action: HotkeyAction, control: &CaptureControl) {
             } else {
                 control.request_pause();
             }
+        }
+        HotkeyAction::SaveReplayBuffer => {
+            control.request_save_replay_buffer();
         }
     }
 }

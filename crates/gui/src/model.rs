@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use framepipe::capture::types::CaptureBackendKind;
 use framepipe::drm_kms::types::{
-    BitrateMode, ColorRange, Colorimetry, EncoderBackend, FrameRateMode, Profile, QualityPreset,
-    VideoCodec,
+    BitrateMode, ColorRange, Colorimetry, EncoderBackend, FrameRateMode, OutputContainer, Profile,
+    QualityPreset, VideoCodec,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,37 @@ impl fmt::Display for SourceChoice {
         match self {
             SourceChoice::MonitorKms => write!(f, "Monitor (KMS)"),
             SourceChoice::Portal => write!(f, "Monitor (Portal)"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputContainerChoice {
+    Mp4,
+    Mkv,
+}
+
+impl OutputContainerChoice {
+    pub const ALL: [OutputContainerChoice; 2] =
+        [OutputContainerChoice::Mp4, OutputContainerChoice::Mkv];
+
+    pub fn to_container(self) -> OutputContainer {
+        match self {
+            OutputContainerChoice::Mp4 => OutputContainer::Mp4,
+            OutputContainerChoice::Mkv => OutputContainer::Mkv,
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        self.to_container().extension()
+    }
+}
+
+impl fmt::Display for OutputContainerChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OutputContainerChoice::Mp4 => write!(f, "MP4"),
+            OutputContainerChoice::Mkv => write!(f, "MKV"),
         }
     }
 }
@@ -374,6 +405,8 @@ pub struct FixedOptions {
     pub cursor_hotspot_y: String,
 
     pub output_path: Option<PathBuf>,
+    pub output_container: OutputContainerChoice,
+    pub replay_seconds: String,
 
     pub keyboard_overlay: bool,
     pub keyboard_overlay_duration_ms: String,
@@ -387,6 +420,7 @@ pub struct FixedOptions {
     pub hotkey_pause: String,
     pub hotkey_resume: String,
     pub hotkey_toggle_pause: String,
+    pub hotkey_save_replay_buffer: String,
 }
 
 impl Default for FixedOptions {
@@ -415,6 +449,8 @@ impl Default for FixedOptions {
             cursor_hotspot_x: "0".to_string(),
             cursor_hotspot_y: "0".to_string(),
             output_path: None,
+            output_container: OutputContainerChoice::Mp4,
+            replay_seconds: "30".to_string(),
             keyboard_overlay: false,
             keyboard_overlay_duration_ms:
                 framepipe::capture::key_overlay::DEFAULT_DISPLAY_DURATION_MS.to_string(),
@@ -430,6 +466,7 @@ impl Default for FixedOptions {
             hotkey_pause: "Ctrl+Shift+P".to_string(),
             hotkey_resume: "Ctrl+Shift+R".to_string(),
             hotkey_toggle_pause: "Ctrl+Shift+Space".to_string(),
+            hotkey_save_replay_buffer: "Ctrl+Shift+S".to_string(),
         }
     }
 }

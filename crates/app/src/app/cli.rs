@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use crate::app::hotkeys::HotkeyBinding;
 use crate::capture::types::CaptureBackendKind;
 use crate::drm_kms::types::{
-    BitrateMode, ColorRange, Colorimetry, EncoderBackend, FrameRateMode, Profile, QualityPreset,
-    VideoCodec,
+    BitrateMode, ColorRange, Colorimetry, EncoderBackend, FrameRateMode, OutputContainer, Profile,
+    QualityPreset, VideoCodec,
 };
 
 #[derive(Parser, Debug)]
@@ -27,6 +27,15 @@ pub enum Commands {
     Record {
         #[command(flatten)]
         capture: CaptureArgs,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Keep an in-memory replay buffer and save it on request
+    Replay {
+        #[command(flatten)]
+        capture: CaptureArgs,
+        #[arg(long, default_value_t = 30)]
+        seconds: u32,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -53,7 +62,7 @@ pub struct CaptureArgs {
     #[arg(
         long = "hotkey",
         value_name = "ACTION=CHORD",
-        help = "Register a recording-time control hotkey, e.g. --hotkey toggle-pause=Ctrl+Shift+P, supported actions: toggle-pause, stop, resume, pause (can be specified multiple times)"
+        help = "Register a recording-time control hotkey, e.g. --hotkey toggle-pause=Ctrl+Shift+P, supported actions: toggle-pause, stop, resume, pause, save-replay-buffer (can be specified multiple times)"
     )]
     pub hotkeys: Vec<HotkeyBinding>,
     #[arg(
@@ -107,6 +116,12 @@ pub struct CaptureArgs {
     pub dump_dir: PathBuf,
     #[arg(long, default_value_t = 30)]
     pub dump_every: u32,
+    #[arg(
+        long = "container",
+        default_value_t = OutputContainer::Mp4,
+        help = "Output container for file and replay-buffer saves"
+    )]
+    pub output_container: OutputContainer,
     #[arg(short = 'b', long, default_value_t = 15000)]
     pub bitrate_kbps: u32,
     #[arg(short = 'f', long, default_value_t = FrameRateMode::Cfr)]
@@ -295,6 +310,7 @@ impl Default for CaptureArgs {
             dump_frames: false,
             dump_dir: PathBuf::from("./frames"),
             dump_every: 30,
+            output_container: OutputContainer::Mp4,
             bitrate_kbps: 15000,
             frame_rate_mode: FrameRateMode::Cfr,
             bitrate_mode: BitrateMode::Default,
