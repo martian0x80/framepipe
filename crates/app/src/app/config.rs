@@ -30,6 +30,7 @@ pub fn build_capture_options(
 
     let card_path = resolve_card_path(capture.card)?;
     Ok(CaptureOptions {
+        privilege_mode: capture.privilege_mode,
         card_path,
         connector: capture.connector,
         allow_fallback_connector: capture.allow_fallback_connector,

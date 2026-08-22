@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::app::hotkeys::HotkeyBinding;
 use crate::capture::types::CaptureBackendKind;
+use crate::drm_kms::privd::PrivilegeMode;
 use crate::drm_kms::types::{
     BitrateMode, ColorRange, Colorimetry, EncoderBackend, FrameRateMode, OutputContainer, Profile,
     QualityPreset, VideoCodec,
@@ -51,6 +52,13 @@ pub enum Commands {
 pub struct CaptureArgs {
     #[arg(long = "capture-backend", default_value_t = CaptureBackendKind::DrmKms)]
     pub capture_backend: CaptureBackendKind,
+    #[arg(
+        long = "privilege-mode",
+        env = "FRAMEPIPE_PRIVILEGE_MODE",
+        default_value_t = PrivilegeMode::Auto,
+        help = "Privileged helper launch mode: auto, direct, or polkit"
+    )]
+    pub privilege_mode: PrivilegeMode,
     #[arg(long)]
     pub card: Option<String>,
     #[arg(long)]
@@ -292,6 +300,7 @@ impl Default for CaptureArgs {
     fn default() -> Self {
         Self {
             capture_backend: CaptureBackendKind::DrmKms,
+            privilege_mode: PrivilegeMode::Auto,
             card: None,
             connector: None,
             allow_fallback_connector: false,

@@ -4,7 +4,7 @@
   package.version = "0.1.4"
 
 [workspace.dependencies]
-clap = { version = "4.5.20", features = ["derive"] }
+clap = { version = "4.5.20", features = ["derive", "env"] }
 ctrlc = "3.4.5"
 drm = "0.14.1"
 drm-sys = "0.8.0"
