@@ -1,7 +1,8 @@
 use crate::app::{App, Message};
 use crate::model::{
     AppMode, BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
-    FrameRateModeChoice, OutputContainerChoice, ProfileChoice, QualityChoice, SourceChoice,
+    FrameRateModeChoice, OutputContainerChoice, PrivilegeModeChoice, ProfileChoice, QualityChoice,
+    SourceChoice,
 };
 use crate::theme::get_all_themes;
 use iced::widget::scrollable::Scrollbar;
@@ -348,6 +349,17 @@ impl App {
                         &SourceChoice::ALL[..],
                         Some(self.fixed.source),
                         Message::SourceChanged
+                    )
+                    .width(Length::Fixed(160.0))
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
+                    text("Privileged access"),
+                    pick_list(
+                        &PrivilegeModeChoice::ALL[..],
+                        Some(self.fixed.privilege_mode),
+                        Message::PrivilegeModeChanged,
                     )
                     .width(Length::Fixed(160.0))
                 ]

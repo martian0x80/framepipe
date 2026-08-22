@@ -14,8 +14,8 @@ use iced::{Subscription, Task, Theme};
 
 use crate::model::{
     AppMode, BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
-    FixedOptions, FrameRateModeChoice, OutputContainerChoice, ProfileChoice, QualityChoice,
-    SourceChoice, UiPage,
+    FixedOptions, FrameRateModeChoice, OutputContainerChoice, PrivilegeModeChoice, ProfileChoice,
+    QualityChoice, SourceChoice, UiPage,
 };
 use crate::preview_shader::PreviewProgram;
 
@@ -32,6 +32,7 @@ pub enum Message {
     ThemeChanged(Theme),
 
     SourceChanged(SourceChoice),
+    PrivilegeModeChanged(PrivilegeModeChoice),
     CardEdited(String),
     ConnectorEdited(String),
     AllowFallbackConnectorToggled(bool),
@@ -283,6 +284,7 @@ impl App {
         };
         CaptureArgs {
             capture_backend: self.fixed.source.to_backend(),
+            privilege_mode: self.fixed.privilege_mode.to_mode(),
             card: (!self.fixed.card.trim().is_empty()).then(|| self.fixed.card.trim().to_string()),
             connector: (!self.fixed.connector.trim().is_empty())
                 .then(|| self.fixed.connector.trim().to_string()),
@@ -802,6 +804,11 @@ impl App {
 
             Message::SourceChanged(v) => {
                 self.fixed.source = v;
+                self.mark_fixed_changed();
+                Task::none()
+            }
+            Message::PrivilegeModeChanged(v) => {
+                self.fixed.privilege_mode = v;
                 self.mark_fixed_changed();
                 Task::none()
             }
