@@ -431,6 +431,7 @@ pub struct FixedOptions {
     pub profile: ProfileChoice,
 
     pub cursor_composition: bool,
+    pub custom_cursor_composition: bool,
     pub wayland_sync_frequency: String,
     pub cursor_hotspot_x: String,
     pub cursor_hotspot_y: String,
@@ -477,6 +478,7 @@ impl Default for FixedOptions {
             colorimetry: ColorimetryChoice::Bt709,
             profile: ProfileChoice::Auto,
             cursor_composition: true,
+            custom_cursor_composition: false,
             wayland_sync_frequency: "0.5".to_string(),
             cursor_hotspot_x: "0".to_string(),
             cursor_hotspot_y: "0".to_string(),
