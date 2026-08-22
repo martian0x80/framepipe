@@ -7,13 +7,11 @@ using GStreamer (VAAPI/QSV/CPU) in realtime. It also supports global mouse track
 
 Framepipe is built around a pragmatic design philosophy: when high-level APIs impose limitations, it falls back to lower-level system interfaces to maintain functionality. This enables features such as global mouse tracking and precise capture behavior that are not currently exposed through standard Wayland mechanisms or might never will be.
 
-Rather than waiting for upstream solutions, we focus on delivering working implementations today, even if that requires stepping outside conventional application boundaries.
-
 Framepipe also includes a Iced-based GUI for configuration and preview, but it can also be used as a CLI tool for recording without the GUI.
 
 <img width="1920" height="1440" alt="144_1x_shots_so" src="https://github.com/user-attachments/assets/2efad40a-8089-46e9-b46c-8106b9dd7a98" />
 
-Two capture backends are available: DRM/KMS and XDG Portal (PipeWire). The former is more stable and convenient but requires some capabilities (`setcap`) to be set, pipewire support is almost stable as well, but requires extra work.
+Two capture backends are available: DRM/KMS and XDG Portal (PipeWire). DRM/KMS is the more stable backend but needs privileged access. Framepipe can request that access through polkit or use a helper with file capabilities. The portal backend does not need privileged display access, although global input features still do.
 
 [Demo Video #1](https://www.youtube.com/watch?v=bOC7lMbf2aY)
 
@@ -51,15 +49,38 @@ Build:
 cargo build --all-targets
 ```
 
-Set caps on the priviledged service binary if you plan to use kms capture:
+### Privileged access
+
+KMS capture and global input tracking need access to protected device files. Framepipe keeps the main application unprivileged and obtains only the required file descriptors through `framepipe-privd`.
+
+Installed packages use `auto` mode by default. Framepipe first tries direct access and opens a polkit authentication prompt only if permission is denied:
+
+```bash
+framepipe record --privilege-mode auto
+```
+
+The available modes are:
+
+- `auto`: try direct access, then fall back to polkit on permission errors.
+- `polkit`: always request authorization through polkit.
+- `direct`: use existing file capabilities, root privileges, or device permissions without a polkit prompt.
+
+The mode can also be set through `FRAMEPIPE_PRIVILEGE_MODE`. A CLI argument overrides the environment variable:
+
+```bash
+FRAMEPIPE_PRIVILEGE_MODE=polkit framepipe record
+framepipe record --privilege-mode direct
+```
+
+Polkit mode requires the packaged helper at `/usr/lib/framepipe/framepipe-privd` and the installed `dev.0x80.framepipe` policy (optional, but recommended).
+
+For development builds, direct mode can be enabled by granting capabilities to the helper:
 
 ```bash
 sudo setcap cap_sys_admin,cap_dac_override+ep target/debug/framepipe-privd
 ```
 
-`cap_sys_admin` is required for DRM/KMS capture, and `cap_dac_override` is needed to read input devices for mouse tracking.
-
-`sudo` is no longer required for the cli, all priviledged operations are handled by the `framepipe-privd` service.
+`cap_sys_admin` enables DRM/KMS capture. `cap_dac_override` enables access to input devices. The main `framepipe` binary does not receive either capability.
 
 Run capture (H.264, default backend):
 
