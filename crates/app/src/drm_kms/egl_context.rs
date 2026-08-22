@@ -434,6 +434,7 @@ pub(crate) fn import_current_capture_texture(
         fb_id,
         fb_info: _,
         plane_fds: _,
+        crtc_id: _,
     } = probe_session.capture_frame().map_err(EglError::Probe)?;
     let exported = privd_session
         .export_framebuffer(fb_id)
@@ -456,6 +457,7 @@ pub(crate) fn import_current_capture_texture(
             .iter()
             .map(|v| (*v).max(0) as u32)
             .collect(),
+        cursor: None,
     };
 
     import_capture_frame_texture(capture_frame, egl, display)
