@@ -11,13 +11,13 @@ use drm::ClientCapability::{Atomic, UniversalPlanes};
 use drm::Device as BasicDevice;
 use drm::control::Device as ControlDevice;
 use drm::control::GetPlanarFramebufferError;
-use drm::control::framebuffer;
+use drm::control::{PlaneType, framebuffer};
 use thiserror::Error;
 
 use common::ipc::{recv_packet, send_packet};
 use common::types::{
-    ExportedFrameInfo, InputDeviceFailure, InputDeviceInfo, IpcRequest, IpcResponse,
-    PRIVD_PROTOCOL_VERSION, PrivdErrorKind,
+    ExportedCursorInfo, ExportedFrameInfo, InputDeviceFailure, InputDeviceInfo, IpcRequest,
+    IpcResponse, PRIVD_PROTOCOL_VERSION, PrivdErrorKind,
 };
 
 #[derive(Debug, Error)]
@@ -184,6 +184,34 @@ fn run() -> eyre::Result<()> {
                     }
                 }
             }
+            IpcRequest::ExportCursor { crtc_id } => {
+                let Some((_, card)) = state.card.as_ref() else {
+                    send_error(
+                        &stream,
+                        PrivdErrorKind::Protocol,
+                        PrivdError::SessionNotInitialized.to_string(),
+                    )?;
+                    continue;
+                };
+                match export_cursor(card, crtc_id) {
+                    Ok(Some((cursor, fds))) => {
+                        let raw: Vec<RawFd> = fds.iter().map(AsRawFd::as_raw_fd).collect();
+                        send_packet(
+                            &stream,
+                            &IpcResponse::CursorExported {
+                                cursor: Some(cursor),
+                            },
+                            &raw,
+                        )
+                        .map_err(|e| PrivdError::IpcSend(e.to_string()))?;
+                    }
+                    Ok(None) => {
+                        send_packet(&stream, &IpcResponse::CursorExported { cursor: None }, &[])
+                            .map_err(|e| PrivdError::IpcSend(e.to_string()))?
+                    }
+                    Err(error) => send_error(&stream, error_kind(&error), error.to_string())?,
+                }
+            }
             IpcRequest::Stop => {
                 log::info!("privd stop request received");
                 break;
@@ -313,6 +341,46 @@ fn export_framebuffer(
     );
 
     Ok((frame, plane_fds))
+}
+
+fn export_cursor(
+    card: &Card,
+    crtc_id: u32,
+) -> Result<Option<(ExportedCursorInfo, Vec<OwnedFd>)>, PrivdError> {
+    for handle in card.plane_handles().map_err(PrivdError::DeviceOperation)? {
+        let plane = card
+            .get_plane(handle)
+            .map_err(PrivdError::DeviceOperation)?;
+        if plane.crtc().map(u32::from) != Some(crtc_id) {
+            continue;
+        }
+        let properties = card
+            .get_properties(handle)
+            .map_err(PrivdError::DeviceOperation)?;
+        let mut is_cursor = false;
+        let mut x = 0;
+        let mut y = 0;
+        for (id, value) in properties.iter() {
+            let property = card
+                .get_property(*id)
+                .map_err(PrivdError::DeviceOperation)?;
+            match property.name().to_str().unwrap_or_default() {
+                "type" => is_cursor = *value == PlaneType::Cursor as u64,
+                "CRTC_X" => x = *value as i64 as i32,
+                "CRTC_Y" => y = *value as i64 as i32,
+                _ => {}
+            }
+        }
+        if !is_cursor {
+            continue;
+        }
+        let Some(fb) = plane.framebuffer() else {
+            return Ok(None);
+        };
+        let (frame, fds) = export_framebuffer(card, fb.into())?;
+        return Ok(Some((ExportedCursorInfo { frame, x, y }, fds)));
+    }
+    Ok(None)
 }
 
 fn enumerate_input_event_nodes() -> Result<Vec<PathBuf>, PrivdError> {

@@ -2,7 +2,7 @@ use arc_swap::ArcSwapOption;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-pub const PRIVD_PROTOCOL_VERSION: u32 = 1;
+pub const PRIVD_PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrivdErrorKind {
@@ -21,6 +21,7 @@ pub enum IpcRequest {
     OpenDrm { card_path: String },
     OpenInput,
     ExportFramebuffer { fb_id: u32 },
+    ExportCursor { crtc_id: u32 },
     Stop,
 }
 
@@ -48,6 +49,13 @@ pub struct ExportedFrameInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportedCursorInfo {
+    pub frame: ExportedFrameInfo,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcResponse {
     Hello {
         protocol_version: u32,
@@ -61,6 +69,9 @@ pub enum IpcResponse {
     },
     FrameExported {
         frame: ExportedFrameInfo,
+    },
+    CursorExported {
+        cursor: Option<ExportedCursorInfo>,
     },
     Error {
         kind: PrivdErrorKind,

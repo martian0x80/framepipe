@@ -11,7 +11,8 @@ use std::{collections::HashMap, fs, io, io::Read, mem::size_of};
 
 use common::ipc::{recv_packet, send_packet};
 use common::types::{
-    ExportedFrameInfo, IpcRequest, IpcResponse, PRIVD_PROTOCOL_VERSION, PrivdErrorKind,
+    ExportedCursorInfo, ExportedFrameInfo, IpcRequest, IpcResponse, PRIVD_PROTOCOL_VERSION,
+    PrivdErrorKind,
 };
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
 
@@ -102,12 +103,35 @@ pub struct ExportedFrame {
     pub info: ExportedFrameInfo,
     pub fds: Vec<OwnedFd>,
 }
+pub struct ExportedCursor {
+    pub info: ExportedCursorInfo,
+    pub fds: Vec<OwnedFd>,
+}
 struct CachedFrame {
     info: ExportedFrameInfo,
     fds: Vec<OwnedFd>,
 }
 
 impl PrivdSession {
+    pub fn export_cursor(&mut self, crtc_id: u32) -> Result<Option<ExportedCursor>, PrivdError> {
+        let (response, fds) = request(&self.stream, IpcRequest::ExportCursor { crtc_id })?;
+        match response {
+            IpcResponse::CursorExported { cursor: None } if fds.is_empty() => Ok(None),
+            IpcResponse::CursorExported {
+                cursor: Some(cursor),
+            } if !fds.is_empty()
+                && cursor.frame.strides.len() == fds.len()
+                && cursor.frame.offsets.len() == fds.len() =>
+            {
+                Ok(Some(ExportedCursor { info: cursor, fds }))
+            }
+            other => Err(PrivdError::Protocol(format!(
+                "unexpected cursor response: {other:?}, fds={}",
+                fds.len()
+            ))),
+        }
+    }
+
     pub fn export_framebuffer(&mut self, fb_id: u32) -> Result<ExportedFrame, PrivdError> {
         match self.export_framebuffer_once(fb_id) {
             Err(error)
