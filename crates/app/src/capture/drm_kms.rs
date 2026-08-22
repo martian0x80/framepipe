@@ -19,13 +19,21 @@ impl CaptureBackend for DrmKmsBackend {
     fn start(&mut self, options: &CaptureOptions) -> Result<(), EglError> {
         let include_input_fds =
             options.cursor_composition || options.keyboard_overlay || !options.hotkeys.is_empty();
-        let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
-            .map_err(|e| {
-                EglError::Pipeline(format!("failed to acquire device fds from privd: {e}"))
-            })?;
+        let privd_session = privd::acquire_device_fds(
+            Some(&options.card_path),
+            include_input_fds,
+            options.privilege_mode,
+        )
+        .map_err(|e| EglError::Pipeline(format!("failed to acquire device fds from privd: {e}")))?;
 
-        let drm_fd = dup_fd(privd_session.drm_fd.as_raw_fd())
-            .map_err(|e| EglError::Pipeline(format!("failed to dup drm fd from privd: {e}")))?;
+        let drm_fd = dup_fd(
+            privd_session
+                .drm_fd
+                .as_ref()
+                .ok_or_else(|| EglError::Pipeline("privd returned no DRM fd".into()))?
+                .as_raw_fd(),
+        )
+        .map_err(|e| EglError::Pipeline(format!("failed to dup drm fd from privd: {e}")))?;
 
         let probe_session = ProbeSession::new_with_card(
             crate::drm_kms::types::Card::from_owned_fd(drm_fd),

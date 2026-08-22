@@ -248,6 +248,7 @@ impl Display for OutputContainer {
 
 #[derive(Debug, Clone)]
 pub struct CaptureOptions {
+    pub privilege_mode: crate::drm_kms::privd::PrivilegeMode,
     pub card_path: String,
     pub connector: Option<String>,
     pub allow_fallback_connector: bool,
