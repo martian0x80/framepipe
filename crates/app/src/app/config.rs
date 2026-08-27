@@ -30,6 +30,7 @@ pub fn build_capture_options(
 
     let card_path = resolve_card_path(capture.card)?;
     Ok(CaptureOptions {
+        privilege_mode: capture.privilege_mode,
         card_path,
         connector: capture.connector,
         allow_fallback_connector: capture.allow_fallback_connector,
@@ -49,7 +50,8 @@ pub fn build_capture_options(
         colorimetry: capture.colorimetry,
         encoder_backend: capture.encoder_backend,
         video_codec: capture.video_codec,
-        cursor_composition: capture.cursor_composition,
+        cursor_composition: capture.cursor_composition && !capture.custom_cursor_composition,
+        custom_cursor_composition: capture.custom_cursor_composition,
         hotkeys: if capture.disable_hotkeys {
             Vec::new()
         } else {

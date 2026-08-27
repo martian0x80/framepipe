@@ -33,13 +33,15 @@ impl CaptureBackend for PipeWirePortalBackend {
         self.producer = None;
         self.first_frame_seen = false;
         self.last_frame = None;
-        let include_input_fds =
-            options.cursor_composition || options.keyboard_overlay || !options.hotkeys.is_empty();
+        let include_input_fds = options.custom_cursor_composition
+            || options.keyboard_overlay
+            || !options.hotkeys.is_empty();
         if include_input_fds {
-            let privd_session = privd::acquire_device_fds(&options.card_path, include_input_fds)
-                .map_err(|e| {
-                    EglError::Pipeline(format!("failed to acquire device fds from privd: {e}"))
-                })?;
+            let privd_session =
+                privd::acquire_device_fds(None, include_input_fds, options.privilege_mode)
+                    .map_err(|e| {
+                        EglError::Pipeline(format!("failed to acquire device fds from privd: {e}"))
+                    })?;
             self.privd = Some(privd_session);
         } else {
             self.privd = None;
@@ -175,5 +177,6 @@ fn dup_capture_frame(frame: &CaptureFrame) -> Result<CaptureFrame, EglError> {
         plane_fds: fds,
         offsets: frame.offsets.clone(),
         strides: frame.strides.clone(),
+        cursor: None,
     })
 }

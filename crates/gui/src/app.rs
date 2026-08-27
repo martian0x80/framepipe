@@ -14,8 +14,8 @@ use iced::{Subscription, Task, Theme};
 
 use crate::model::{
     AppMode, BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
-    FixedOptions, FrameRateModeChoice, OutputContainerChoice, ProfileChoice, QualityChoice,
-    SourceChoice, UiPage,
+    FixedOptions, FrameRateModeChoice, OutputContainerChoice, PrivilegeModeChoice, ProfileChoice,
+    QualityChoice, SourceChoice, UiPage,
 };
 use crate::preview_shader::PreviewProgram;
 
@@ -32,6 +32,7 @@ pub enum Message {
     ThemeChanged(Theme),
 
     SourceChanged(SourceChoice),
+    PrivilegeModeChanged(PrivilegeModeChoice),
     CardEdited(String),
     ConnectorEdited(String),
     AllowFallbackConnectorToggled(bool),
@@ -52,6 +53,7 @@ pub enum Message {
     ColorimetryChanged(ColorimetryChoice),
     ProfileChanged(ProfileChoice),
     CursorCompositionToggled(bool),
+    CustomCursorCompositionToggled(bool),
     WaylandSyncFrequencyEdited(String),
     CursorHotspotXEdited(String),
     CursorHotspotYEdited(String),
@@ -283,6 +285,7 @@ impl App {
         };
         CaptureArgs {
             capture_backend: self.fixed.source.to_backend(),
+            privilege_mode: self.fixed.privilege_mode.to_mode(),
             card: (!self.fixed.card.trim().is_empty()).then(|| self.fixed.card.trim().to_string()),
             connector: (!self.fixed.connector.trim().is_empty())
                 .then(|| self.fixed.connector.trim().to_string()),
@@ -324,9 +327,10 @@ impl App {
             encoder_backend: self.fixed.encoder.to_encoder(),
             video_codec: self.fixed.codec.to_codec(),
             cursor_composition: self.fixed.cursor_composition,
+            custom_cursor_composition: self.fixed.custom_cursor_composition,
             cursor_hotspot_x: Self::parse_or(&self.fixed.cursor_hotspot_x, 0_i32),
             cursor_hotspot_y: Self::parse_or(&self.fixed.cursor_hotspot_y, 0_i32),
-            cursor_scale: self.live.cursor_scale.clamp(1.0, 100.0),
+            cursor_scale: self.live.cursor_scale.clamp(1.0, 300.0),
             cursor_smooth: self.live.cursor_smooth,
             cursor_smear: self.live.cursor_smear,
             cursor_spring_k: self.live.cursor_spring_k,
@@ -430,7 +434,7 @@ impl App {
             Ok(options) => {
                 self.mode = AppMode::Recording;
                 self.replay_recording = replay;
-                self.record_started_at = Some(Instant::now());
+                self.record_started_at = None;
                 self.total_paused_duration = std::time::Duration::ZERO;
                 self.pause_start = None;
                 self.status = if replay {
@@ -472,6 +476,14 @@ impl App {
     }
 
     fn sync_recording_pause_state(&mut self) {
+        if self.record_started_at.is_none()
+            && self
+                .record_control
+                .as_ref()
+                .is_some_and(|control| control.started.load(std::sync::atomic::Ordering::Acquire))
+        {
+            self.record_started_at = Some(Instant::now());
+        }
         let Some(control) = &self.record_control else {
             return;
         };
@@ -805,6 +817,11 @@ impl App {
                 self.mark_fixed_changed();
                 Task::none()
             }
+            Message::PrivilegeModeChanged(v) => {
+                self.fixed.privilege_mode = v;
+                self.mark_fixed_changed();
+                Task::none()
+            }
             Message::CardEdited(v) => {
                 self.fixed.card = v;
                 self.mark_fixed_changed();
@@ -902,6 +919,17 @@ impl App {
             }
             Message::CursorCompositionToggled(v) => {
                 self.fixed.cursor_composition = v;
+                if v {
+                    self.fixed.custom_cursor_composition = false;
+                }
+                self.mark_fixed_changed();
+                Task::none()
+            }
+            Message::CustomCursorCompositionToggled(v) => {
+                self.fixed.custom_cursor_composition = v;
+                if v {
+                    self.fixed.cursor_composition = false;
+                }
                 self.mark_fixed_changed();
                 Task::none()
             }

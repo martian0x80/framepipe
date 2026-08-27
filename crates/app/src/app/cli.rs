@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::app::hotkeys::HotkeyBinding;
 use crate::capture::types::CaptureBackendKind;
+use crate::drm_kms::privd::PrivilegeMode;
 use crate::drm_kms::types::{
     BitrateMode, ColorRange, Colorimetry, EncoderBackend, FrameRateMode, OutputContainer, Profile,
     QualityPreset, VideoCodec,
@@ -51,6 +52,13 @@ pub enum Commands {
 pub struct CaptureArgs {
     #[arg(long = "capture-backend", default_value_t = CaptureBackendKind::DrmKms)]
     pub capture_backend: CaptureBackendKind,
+    #[arg(
+        long = "privilege-mode",
+        env = "FRAMEPIPE_PRIVILEGE_MODE",
+        default_value_t = PrivilegeMode::Auto,
+        help = "Privileged helper launch mode: auto, direct, or polkit"
+    )]
+    pub privilege_mode: PrivilegeMode,
     #[arg(long)]
     pub card: Option<String>,
     #[arg(long)]
@@ -143,8 +151,16 @@ pub struct CaptureArgs {
     pub encoder_backend: EncoderBackend,
     #[arg(short = 'v', long, default_value_t = VideoCodec::H264)]
     pub video_codec: VideoCodec,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
     pub cursor_composition: bool,
+    #[arg(long, default_value_t = false, conflicts_with = "cursor_composition")]
+    pub custom_cursor_composition: bool,
     #[arg(long, help = "PNG sprite for live cursor composition")]
     pub cursor_sprite: Option<PathBuf>,
     #[arg(long, default_value_t = 0, help = "Cursor hotspot X in sprite pixels")]
@@ -153,8 +169,8 @@ pub struct CaptureArgs {
     pub cursor_hotspot_y: i32,
     #[arg(
         long,
-        default_value_t = 50.0,
-        help = "Cursor sprite scale as percentage [1.0, 100.0]"
+        default_value_t = 100.0,
+        help = "Cursor scale as percentage [1.0, 300.0]"
     )]
     pub cursor_scale: f32,
     #[arg(long, default_value_t = false, help = "Enable cursor smoothing")]
@@ -292,6 +308,7 @@ impl Default for CaptureArgs {
     fn default() -> Self {
         Self {
             capture_backend: CaptureBackendKind::DrmKms,
+            privilege_mode: PrivilegeMode::Auto,
             card: None,
             connector: None,
             allow_fallback_connector: false,
@@ -319,11 +336,12 @@ impl Default for CaptureArgs {
             colorimetry: Colorimetry::Bt709,
             encoder_backend: EncoderBackend::Qsv,
             video_codec: VideoCodec::H264,
-            cursor_composition: false,
+            cursor_composition: true,
+            custom_cursor_composition: false,
             cursor_sprite: None,
             cursor_hotspot_x: 0,
             cursor_hotspot_y: 0,
-            cursor_scale: 50.0,
+            cursor_scale: 100.0,
             cursor_smooth: false,
             cursor_smear: false,
             cursor_spring_k: 120.0,

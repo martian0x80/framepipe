@@ -233,7 +233,7 @@ fn run_layer_shell_loop(run: LayerShellRun) -> Result<(), WaylandError> {
             && last_anchor_at.elapsed() >= period
         {
             state.waiting_for_anchor = true;
-            state.runtime.clear_anchor();
+            // don't clear the last anchor
             state.resync_probe_mode = true;
             state.resync_deadline = Some(Instant::now() + Duration::from_millis(50));
             state.set_input_region_probe(&qh);

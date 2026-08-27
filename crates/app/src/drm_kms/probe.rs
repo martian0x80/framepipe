@@ -342,6 +342,7 @@ impl ProbeSession {
             fb_id,
             fb_info,
             plane_fds,
+            crtc_id: capture_plane.crtc().ok_or(ProbeError::GetCrtcInfo)?.into(),
         })
     }
 

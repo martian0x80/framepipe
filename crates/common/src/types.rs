@@ -2,21 +2,39 @@ use arc_swap::ArcSwapOption;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+pub const PRIVD_PROTOCOL_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PrivdErrorKind {
+    PermissionDenied,
+    AuthenticationCancelled,
+    PolkitUnavailable,
+    DeviceUnavailable,
+    Unsupported,
+    Protocol,
+    Internal,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcRequest {
-    StartSession {
-        card_path: String,
-        include_input_fds: bool,
-    },
-    ExportFramebuffer {
-        fb_id: u32,
-    },
+    Hello { protocol_version: u32 },
+    OpenDrm { card_path: String },
+    OpenInput,
+    ExportFramebuffer { fb_id: u32 },
+    ExportCursor { crtc_id: u32 },
     Stop,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputDeviceInfo {
     pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputDeviceFailure {
+    pub path: String,
+    pub kind: PrivdErrorKind,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,15 +49,32 @@ pub struct ExportedFrameInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportedCursorInfo {
+    pub frame: ExportedFrameInfo,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcResponse {
-    SessionReady {
+    Hello {
+        protocol_version: u32,
+    },
+    DrmOpened {
         card_path: String,
+    },
+    InputOpened {
         input_devices: Vec<InputDeviceInfo>,
+        failures: Vec<InputDeviceFailure>,
     },
     FrameExported {
         frame: ExportedFrameInfo,
     },
+    CursorExported {
+        cursor: Option<ExportedCursorInfo>,
+    },
     Error {
+        kind: PrivdErrorKind,
         message: String,
     },
 }

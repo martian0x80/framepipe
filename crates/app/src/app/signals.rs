@@ -12,6 +12,7 @@ pub struct CaptureControl {
     pub pause_req: Arc<AtomicBool>,
     pub resume_req: Arc<AtomicBool>,
     pub paused: Arc<AtomicBool>,
+    pub started: Arc<AtomicBool>,
     pub save_replay_buffer_req: Arc<AtomicBool>,
 }
 
@@ -22,6 +23,7 @@ impl CaptureControl {
             pause_req: Arc::new(AtomicBool::new(false)),
             resume_req: Arc::new(AtomicBool::new(false)),
             paused: Arc::new(AtomicBool::new(false)),
+            started: Arc::new(AtomicBool::new(false)),
             save_replay_buffer_req: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -45,6 +47,7 @@ impl CaptureControl {
         self.pause_req.store(false, Ordering::Relaxed);
         self.resume_req.store(false, Ordering::Relaxed);
         self.paused.store(false, Ordering::Relaxed);
+        self.started.store(false, Ordering::Relaxed);
         self.save_replay_buffer_req.store(false, Ordering::Relaxed);
     }
 

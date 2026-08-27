@@ -27,4 +27,20 @@ pub struct CaptureFrame {
     pub plane_fds: Vec<std::os::fd::OwnedFd>,
     pub offsets: Vec<u32>,
     pub strides: Vec<u32>,
+    pub cursor: Option<CaptureCursor>,
+}
+
+pub struct CaptureCursor {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub fb_id: u32,
+    pub buffer_width: i32,
+    pub buffer_height: i32,
+    pub fourcc: u32,
+    pub modifier: Option<u64>,
+    pub plane_fds: Vec<std::os::fd::OwnedFd>,
+    pub offsets: Vec<u32>,
+    pub strides: Vec<u32>,
 }

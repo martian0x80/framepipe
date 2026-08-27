@@ -676,6 +676,7 @@ fn run_pipewire_stream(
                         plane_fds,
                         offsets,
                         strides,
+                        cursor: None,
                     });
                 }
 

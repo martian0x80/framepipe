@@ -1,7 +1,8 @@
 use crate::app::{App, Message};
 use crate::model::{
     AppMode, BitrateModeChoice, CodecChoice, ColorRangeChoice, ColorimetryChoice, EncoderChoice,
-    FrameRateModeChoice, OutputContainerChoice, ProfileChoice, QualityChoice, SourceChoice,
+    FrameRateModeChoice, OutputContainerChoice, PrivilegeModeChoice, ProfileChoice, QualityChoice,
+    SourceChoice,
 };
 use crate::theme::get_all_themes;
 use iced::widget::scrollable::Scrollbar;
@@ -354,6 +355,17 @@ impl App {
                 .spacing(8)
                 .align_y(Alignment::Center),
                 row![
+                    text("Privileged access"),
+                    pick_list(
+                        &PrivilegeModeChoice::ALL[..],
+                        Some(self.fixed.privilege_mode),
+                        Message::PrivilegeModeChanged,
+                    )
+                    .width(Length::Fixed(160.0))
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                row![
                     text("Connector"),
                     text_input("eDP-1", &self.fixed.connector)
                         .on_input_maybe((!disabled).then_some(Message::ConnectorEdited))
@@ -468,12 +480,33 @@ impl App {
             let mut col = column![
                 Self::subsection_label("CURSOR"),
                 toggler(self.fixed.cursor_composition)
-                    .label("Cursor composition")
+                    .label("Native KMS cursor")
                     .on_toggle_maybe((!disabled).then_some(Message::CursorCompositionToggled)),
+                toggler(self.fixed.custom_cursor_composition)
+                    .label("Custom cursor and effects")
+                    .on_toggle_maybe(
+                        (!disabled).then_some(Message::CustomCursorCompositionToggled),
+                    ),
             ]
             .spacing(8);
 
-            if self.fixed.cursor_composition {
+            if self.fixed.cursor_composition || self.fixed.custom_cursor_composition {
+                col = col.push(
+                    row![
+                        text(format!("Scale {:.2}", self.live.cursor_scale)),
+                        slider(
+                            1.0..=300.0,
+                            self.live.cursor_scale,
+                            Message::CursorScaleChanged
+                        )
+                        .width(Length::Fill),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                );
+            }
+
+            if self.fixed.custom_cursor_composition {
                 col = col
                     .push(
                         row![
@@ -504,19 +537,6 @@ impl App {
                                     (!disabled).then_some(Message::CursorHotspotYEdited)
                                 )
                                 .width(Length::Fixed(70.0)),
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center),
-                    )
-                    .push(
-                        row![
-                            text(format!("Scale {:.2}", self.live.cursor_scale)),
-                            slider(
-                                0.0..=100.0,
-                                self.live.cursor_scale,
-                                Message::CursorScaleChanged
-                            )
-                            .width(Length::Fill),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),

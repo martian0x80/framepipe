@@ -2,6 +2,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use framepipe::capture::types::CaptureBackendKind;
+use framepipe::drm_kms::privd::PrivilegeMode;
 use framepipe::drm_kms::types::{
     BitrateMode, ColorRange, Colorimetry, EncoderBackend, FrameRateMode, OutputContainer, Profile,
     QualityPreset, VideoCodec,
@@ -25,6 +26,35 @@ pub enum UiPage {
 pub enum SourceChoice {
     MonitorKms,
     Portal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivilegeModeChoice {
+    Automatic,
+    Polkit,
+    Preauthorized,
+}
+
+impl PrivilegeModeChoice {
+    pub const ALL: [Self; 3] = [Self::Automatic, Self::Polkit, Self::Preauthorized];
+
+    pub fn to_mode(self) -> PrivilegeMode {
+        match self {
+            Self::Automatic => PrivilegeMode::Auto,
+            Self::Polkit => PrivilegeMode::Polkit,
+            Self::Preauthorized => PrivilegeMode::Direct,
+        }
+    }
+}
+
+impl fmt::Display for PrivilegeModeChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Automatic => "Automatic",
+            Self::Polkit => "Polkit",
+            Self::Preauthorized => "Pre-authorized helper",
+        })
+    }
 }
 
 impl SourceChoice {
@@ -379,6 +409,7 @@ impl fmt::Display for ProfileChoice {
 #[derive(Debug, Clone)]
 pub struct FixedOptions {
     pub source: SourceChoice,
+    pub privilege_mode: PrivilegeModeChoice,
     pub card: String,
     pub connector: String,
     pub allow_fallback_connector: bool,
@@ -400,6 +431,7 @@ pub struct FixedOptions {
     pub profile: ProfileChoice,
 
     pub cursor_composition: bool,
+    pub custom_cursor_composition: bool,
     pub wayland_sync_frequency: String,
     pub cursor_hotspot_x: String,
     pub cursor_hotspot_y: String,
@@ -427,6 +459,7 @@ impl Default for FixedOptions {
     fn default() -> Self {
         Self {
             source: SourceChoice::MonitorKms,
+            privilege_mode: PrivilegeModeChoice::Automatic,
             card: String::new(),
             connector: String::new(),
             allow_fallback_connector: false,
@@ -445,6 +478,7 @@ impl Default for FixedOptions {
             colorimetry: ColorimetryChoice::Bt709,
             profile: ProfileChoice::Auto,
             cursor_composition: true,
+            custom_cursor_composition: false,
             wayland_sync_frequency: "0.5".to_string(),
             cursor_hotspot_x: "0".to_string(),
             cursor_hotspot_y: "0".to_string(),

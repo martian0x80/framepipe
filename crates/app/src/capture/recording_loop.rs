@@ -22,6 +22,7 @@ use crate::{
     capture::{
         backend::CaptureBackend,
         key_overlay::{KeyOverlayConfig, KeyOverlayRenderer, KeyOverlayState},
+        types::CaptureFrame,
     },
     shared::keyboard_ring::KeyboardOverlayRingBuffer,
 };
@@ -44,6 +45,92 @@ fn replay_save_path(base: &std::path::Path, frame_idx: u64) -> PathBuf {
     base.with_file_name(name)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn cursor_state_with_effects(
+    texture: NativeTexture,
+    x: f32,
+    y: f32,
+    mut width: f32,
+    mut height: f32,
+    live: &LiveSettings,
+    output_w: i32,
+    output_h: i32,
+    smoother: &mut CursorSmoother,
+    last_update: &mut Instant,
+    last_sample: &mut Option<(f32, f32, Instant)>,
+) -> gpu_pipeline::CursorState {
+    let now = Instant::now();
+    let dt = (now - *last_update).as_secs_f32().clamp(0.0, 0.05);
+    *last_update = now;
+    let (x, y) = if live.cursor_smooth {
+        smoother.update(
+            x,
+            y,
+            dt,
+            live.cursor_spring_k,
+            live.cursor_spring_d,
+            live.cursor_max_speed,
+            live.cursor_snap_px,
+            live.cursor_smooth_ms,
+            live.cursor_deadzone_px,
+        )
+    } else {
+        (x, y)
+    };
+    let mut taps = vec![[x, y, 1.0]];
+    let mut dir_x = 1.0;
+    let mut dir_y = 0.0;
+    let mut stretch = 1.0;
+    let mut squash = 1.0;
+    if live.cursor_smear
+        && let Some((prev_x, prev_y, prev_t)) = *last_sample
+    {
+        let sample_dt = (now - prev_t).as_secs_f32().max(1e-4);
+        let vx = (x - prev_x) / sample_dt;
+        let vy = (y - prev_y) / sample_dt;
+        let speed = (vx * vx + vy * vy).sqrt();
+        if speed > live.cursor_smear_speed_threshold.max(0.0) {
+            dir_x = vx / speed;
+            dir_y = vy / speed;
+            let min_len = live.cursor_smear_min_len.max(0.0);
+            let max_len = live.cursor_smear_max_len.max(min_len);
+            let blur_len =
+                (speed * (1.0 / live.fps.max(1) as f32) * live.cursor_smear_shutter_scale.max(0.0))
+                    .clamp(min_len, max_len);
+            let tap_count = live.cursor_smear_taps.clamp(1, 8) as usize;
+            for i in 1..=tap_count {
+                let t = i as f32 / tap_count as f32;
+                let alpha = ((1.0 - t).powf(live.cursor_smear_alpha_exp.max(0.05))
+                    * live.cursor_smear_alpha_scale.clamp(0.0, 1.0))
+                .clamp(0.0, 1.0);
+                taps.push([x - dir_x * blur_len * t, y - dir_y * blur_len * t, alpha]);
+            }
+            let amount = ((speed - live.cursor_smear_stretch_threshold.max(0.0))
+                / live.cursor_smear_stretch_range.max(1.0))
+            .clamp(0.0, 1.0);
+            stretch = 1.0 + live.cursor_smear_max_stretch.max(0.0) * amount;
+            squash = 1.0 - live.cursor_smear_max_squash.clamp(0.0, 0.95) * amount;
+        }
+    }
+    *last_sample = Some((x, y, now));
+
+    if live.background_enabled && live.background_zoom < 100.0 {
+        let zoom = live.background_zoom.clamp(1.0, 100.0).div(100.0);
+        let off_x = output_w as f32 * (1.0 - zoom) * 0.5;
+        let off_y = output_h as f32 * (1.0 - zoom) * 0.5;
+        for tap in &mut taps {
+            tap[0] = tap[0] * zoom + off_x;
+            tap[1] = tap[1] * zoom + off_y;
+        }
+        width *= zoom;
+        height *= zoom;
+    }
+
+    gpu_pipeline::CursorState::with_blur_samples(
+        texture, width, height, taps, dir_x, dir_y, stretch, squash,
+    )
+}
+
 pub fn run_capture_session(
     options: CaptureOptions,
     control: CaptureControl,
@@ -55,15 +142,16 @@ pub fn run_capture_session(
         options.connector,
         options.fps
     );
-    let use_input_tracking =
-        options.cursor_composition || options.keyboard_overlay || !options.hotkeys.is_empty();
+    let use_input_tracking = options.custom_cursor_composition
+        || options.keyboard_overlay
+        || !options.hotkeys.is_empty();
     let input_fds_for_tracker = if use_input_tracking {
         backend.take_input_fds()
     } else {
         None
     };
 
-    let mouse_ring: Option<Arc<RingBuffer>> = if options.cursor_composition {
+    let mouse_ring: Option<Arc<RingBuffer>> = if options.custom_cursor_composition {
         Some(Arc::new(RingBuffer::new(512)))
     } else {
         None
@@ -106,7 +194,7 @@ pub fn run_capture_session(
         let keyboard_ring_clone = keyboard_ring.clone();
         let preopened_input_fds = input_fds_for_tracker;
         let hotkeys = options.hotkeys.clone();
-        let enable_layer_shell = options.cursor_composition;
+        let enable_layer_shell = options.custom_cursor_composition;
         let handle = thread::spawn(move || {
             if let Err(e) = init_wayland(
                 sync_frequency_hz,
@@ -242,51 +330,52 @@ pub fn run_capture_session(
     let cursor_state_empty = gpu_pipeline::CursorState::empty();
     let overlay_state_empty = gpu_pipeline::OverlayState::empty();
     let mut cursor_smoother = CursorSmoother::default();
-    let (cursor_tex, cursor_w, cursor_h, hotspot_x, hotspot_y) = if options.cursor_composition {
-        let (tex, base_w, base_h, auto_hotspot) =
-            if let Some(sprite_path) = options.cursor_sprite.as_ref() {
-                let (tex, w, h) =
-                    load_rgba_texture(&pipelines[0].gl, sprite_path).map_err(EglError::Pipeline)?;
-                // Large cursor atlases are commonly centered with transparent borders.
-                // let auto_hotspot = if options.cursor_hotspot_x == 0 && options.cursor_hotspot_y == 0 {
-                //     Some((w * 0.5_f32, h * 0.5_f32))
-                // } else {
-                //     None
-                // };
-                log::info!(
-                    "Cursor composition enabled, using custom sprite {} ({}x{})",
-                    sprite_path.display(),
-                    w,
-                    h
-                );
-                (tex, w, h, Some((0.0, 0.0)))
-            } else {
-                let tex =
-                    create_default_cursor_texture(&pipelines[0].gl).map_err(EglError::Pipeline)?;
-                log::info!("Cursor composition enabled, created default cursor texture");
-                (tex, 24.0_f32, 24.0_f32, None)
-            };
+    let (cursor_tex, cursor_w, cursor_h, hotspot_x, hotspot_y) =
+        if options.custom_cursor_composition {
+            let (tex, base_w, base_h, auto_hotspot) =
+                if let Some(sprite_path) = options.cursor_sprite.as_ref() {
+                    let (tex, w, h) = load_rgba_texture(&pipelines[0].gl, sprite_path)
+                        .map_err(EglError::Pipeline)?;
+                    // Large cursor atlases are commonly centered with transparent borders.
+                    // let auto_hotspot = if options.cursor_hotspot_x == 0 && options.cursor_hotspot_y == 0 {
+                    //     Some((w * 0.5_f32, h * 0.5_f32))
+                    // } else {
+                    //     None
+                    // };
+                    log::info!(
+                        "Cursor composition enabled, using custom sprite {} ({}x{})",
+                        sprite_path.display(),
+                        w,
+                        h
+                    );
+                    (tex, w, h, Some((0.0, 0.0)))
+                } else {
+                    let tex = create_default_cursor_texture(&pipelines[0].gl)
+                        .map_err(EglError::Pipeline)?;
+                    log::info!("Cursor composition enabled, created default cursor texture");
+                    (tex, 24.0_f32, 24.0_f32, None)
+                };
 
-        let scale = options.cursor_scale.clamp(1.0, 100.0).div(100.0);
-        let out_w = base_w * scale;
-        let out_h = base_h * scale;
-        let (hotspot_x, hotspot_y) = if let Some((ax, ay)) = auto_hotspot {
-            log::info!(
-                "Auto hotspot enabled for custom sprite: ({:.1}, {:.1}) before scale",
-                ax,
-                ay
-            );
-            (ax * scale, ay * scale)
+            let scale = options.cursor_scale.clamp(1.0, 300.0).div(100.0);
+            let out_w = base_w * scale;
+            let out_h = base_h * scale;
+            let (hotspot_x, hotspot_y) = if let Some((ax, ay)) = auto_hotspot {
+                log::info!(
+                    "Auto hotspot enabled for custom sprite: ({:.1}, {:.1}) before scale",
+                    ax,
+                    ay
+                );
+                (ax * scale, ay * scale)
+            } else {
+                (
+                    (options.cursor_hotspot_x as f32 * scale).max(0.0),
+                    (options.cursor_hotspot_y as f32 * scale).max(0.0),
+                )
+            };
+            (Some(tex), out_w, out_h, hotspot_x, hotspot_y)
         } else {
-            (
-                (options.cursor_hotspot_x as f32 * scale).max(0.0),
-                (options.cursor_hotspot_y as f32 * scale).max(0.0),
-            )
+            (None, 0.0, 0.0, 0.0, 0.0)
         };
-        (Some(tex), out_w, out_h, hotspot_x, hotspot_y)
-    } else {
-        (None, 0.0, 0.0, 0.0, 0.0)
-    };
     // Allow live-reloading the cursor sprite and hotspot via LiveSettings.
     let (mut cursor_tex, mut cursor_w, mut cursor_h) = (cursor_tex, cursor_w, cursor_h);
 
@@ -390,6 +479,7 @@ pub fn run_capture_session(
         enc.push_frame(ex)
             .map_err(|e| EglError::Pipeline(e.to_string()))?;
     }
+    control.started.store(true, Ordering::Release);
     let _ = delete_gl_texture(&egl, texture);
     frame_idx += 1;
 
@@ -438,7 +528,7 @@ pub fn run_capture_session(
                 let _ = delete_gl_texture(&egl, old_tex.0.into());
             }
             // todo: allow 3x scale for custom cursors
-            let scale = live.cursor_scale.clamp(1.0, 100.0).div(100.0);
+            let scale = live.cursor_scale.clamp(1.0, 300.0).div(100.0);
             let result = match live.cursor_sprite.as_deref() {
                 Some(path) => load_rgba_texture(&pipelines[0].gl, path)
                     .map(|(t, w, h)| (Some(t), w * scale, h * scale)),
@@ -527,7 +617,7 @@ pub fn run_capture_session(
             continue;
         }
 
-        let frame = match backend.next_frame(Duration::from_millis(100)) {
+        let mut frame = match backend.next_frame(Duration::from_millis(100)) {
             Ok(Some(f)) => f,
             Ok(None) => {
                 if control.stop_requested.load(Ordering::Relaxed) {
@@ -543,6 +633,8 @@ pub fn run_capture_session(
                 return Err(e);
             }
         };
+
+        let native_cursor = frame.cursor.take().filter(|_| options.cursor_composition);
 
         let (frame_texture, frame_w, frame_h, fb_id, use_external_texture) =
             match import_capture_frame_texture(frame, &egl, display) {
@@ -569,9 +661,56 @@ pub fn run_capture_session(
             source_h = frame_h;
         }
 
-        let cursor_state = if let (Some(ring), Some(ctex)) =
-            (mouse_ring.as_ref(), cursor_tex.as_ref())
-        {
+        let native_cursor_texture = native_cursor.and_then(|cursor| {
+            let x_scale = output_w as f32 / source_w as f32;
+            let y_scale = output_h as f32 / source_h as f32;
+            let x = cursor.x as f32 * x_scale;
+            let y = cursor.y as f32 * y_scale;
+            let mut width = cursor.width as f32 * x_scale;
+            let mut height = cursor.height as f32 * y_scale;
+            let cursor_scale = live.cursor_scale.clamp(1.0, 300.0).div(100.0);
+            width *= cursor_scale;
+            height *= cursor_scale;
+            let frame = CaptureFrame {
+                fb_id: cursor.fb_id,
+                width: cursor.buffer_width,
+                height: cursor.buffer_height,
+                fourcc: cursor.fourcc,
+                modifier: cursor.modifier,
+                plane_fds: cursor.plane_fds,
+                offsets: cursor.offsets,
+                strides: cursor.strides,
+                cursor: None,
+            };
+            match import_capture_frame_texture(frame, &egl, display) {
+                Ok((texture, _, _, _, false)) => Some((texture, x, y, width, height)),
+                Ok((texture, _, _, _, true)) => {
+                    let _ = delete_gl_texture(&egl, texture);
+                    log::debug!("KMS cursor requires an external texture; using custom cursor");
+                    None
+                }
+                Err(error) => {
+                    log::debug!("KMS cursor import unavailable: {error}");
+                    None
+                }
+            }
+        });
+
+        let cursor_state = if let Some((texture, x, y, width, height)) = native_cursor_texture {
+            cursor_state_with_effects(
+                NativeTexture(NonZero::new(texture).unwrap()),
+                x,
+                y,
+                width,
+                height,
+                &live,
+                output_w,
+                output_h,
+                &mut cursor_smoother,
+                &mut last_cursor_update,
+                &mut last_cursor_sample,
+            )
+        } else if let (Some(ring), Some(ctex)) = (mouse_ring.as_ref(), cursor_tex.as_ref()) {
             if let Some(event) = ring.latest_before(u64::MAX) {
                 log::trace!(
                     "Frame {}: latest mouse at ({:.1}, {:.1})",
@@ -603,91 +742,18 @@ pub fn run_capture_session(
                 let max_y = (output_h as f32 - 1.0).max(min_y);
                 let cursor_x = (mx - hotspot_x).clamp(min_x, max_x);
                 let cursor_y = (my - hotspot_y).clamp(min_y, max_y);
-                let now = Instant::now();
-                let dt = (now - last_cursor_update).as_secs_f32().clamp(0.0, 0.05);
-                last_cursor_update = now;
-                let (s_cursor_x, s_cursor_y) = if live.cursor_smooth {
-                    cursor_smoother.update(
-                        cursor_x,
-                        cursor_y,
-                        dt,
-                        live.cursor_spring_k,
-                        live.cursor_spring_d,
-                        live.cursor_max_speed,
-                        live.cursor_snap_px,
-                        live.cursor_smooth_ms,
-                        live.cursor_deadzone_px,
-                    )
-                } else {
-                    (cursor_x, cursor_y)
-                };
-                let mut taps: Vec<[f32; 3]> = Vec::with_capacity(8);
-                taps.push([s_cursor_x, s_cursor_y, 1.0]);
-                let mut motion_dir_x = 1.0f32;
-                let mut motion_dir_y = 0.0f32;
-                let mut motion_stretch = 1.0f32;
-                let mut motion_squash = 1.0f32;
-
-                if live.cursor_smear
-                    && let Some((prev_x, prev_y, prev_t)) = last_cursor_sample
-                {
-                    let vdt = (now - prev_t).as_secs_f32().max(1e-4);
-                    let vx = (s_cursor_x - prev_x) / vdt;
-                    let vy = (s_cursor_y - prev_y) / vdt;
-                    let speed = (vx * vx + vy * vy).sqrt();
-                    if speed > live.cursor_smear_speed_threshold.max(0.0) {
-                        let shutter_seconds = (1.0 / live.fps.max(1) as f32)
-                            * live.cursor_smear_shutter_scale.max(0.0);
-                        let min_len = live.cursor_smear_min_len.max(0.0);
-                        let max_len = live.cursor_smear_max_len.max(min_len);
-                        let blur_len = (speed * shutter_seconds).clamp(min_len, max_len);
-                        motion_dir_x = vx / speed;
-                        motion_dir_y = vy / speed;
-                        let extra_taps = live.cursor_smear_taps.clamp(1, 8) as usize;
-                        let alpha_exp = live.cursor_smear_alpha_exp.max(0.05);
-                        let alpha_scale = live.cursor_smear_alpha_scale.clamp(0.0, 1.0);
-                        for i in 1..=extra_taps {
-                            let t = i as f32 / extra_taps as f32;
-                            let alpha = ((1.0 - t).powf(alpha_exp) * alpha_scale).clamp(0.0, 1.0);
-                            taps.push([
-                                s_cursor_x - motion_dir_x * blur_len * t,
-                                s_cursor_y - motion_dir_y * blur_len * t,
-                                alpha,
-                            ]);
-                        }
-
-                        // Stretch cursor shape along motion axis.
-                        let stretch_threshold = live.cursor_smear_stretch_threshold.max(0.0);
-                        let stretch_range = live.cursor_smear_stretch_range.max(1.0);
-                        let s = ((speed - stretch_threshold) / stretch_range).clamp(0.0, 1.0);
-                        motion_stretch = 1.0 + live.cursor_smear_max_stretch.max(0.0) * s;
-                        motion_squash = 1.0 - live.cursor_smear_max_squash.clamp(0.0, 0.95) * s;
-                    }
-                }
-                last_cursor_sample = Some((s_cursor_x, s_cursor_y, now));
-
-                // Apply background-zoom transform to all tap coordinates so the
-                // cursor tracks the shrunken frame rather than the full output.
-                let taps = if live.background_enabled && live.background_zoom < 100.0 {
-                    let zoom = live.background_zoom.clamp(1.0, 100.0).div(100.0);
-                    let off_x = output_w as f32 * (1.0 - zoom) * 0.5;
-                    let off_y = output_h as f32 * (1.0 - zoom) * 0.5;
-                    taps.into_iter()
-                        .map(|[x, y, a]| [x * zoom + off_x, y * zoom + off_y, a])
-                        .collect()
-                } else {
-                    taps
-                };
-
-                gpu_pipeline::CursorState::with_blur_samples(
+                cursor_state_with_effects(
                     *ctex,
+                    cursor_x,
+                    cursor_y,
                     cursor_w,
                     cursor_h,
-                    taps,
-                    motion_dir_x,
-                    motion_dir_y,
-                    motion_stretch,
-                    motion_squash,
+                    &live,
+                    output_w,
+                    output_h,
+                    &mut cursor_smoother,
+                    &mut last_cursor_update,
+                    &mut last_cursor_sample,
                 )
             } else {
                 cursor_state_empty.clone()
@@ -787,6 +853,9 @@ pub fn run_capture_session(
                     .map_err(|e| EglError::Pipeline(e.to_string()))?;
             }
             let _ = delete_gl_texture(&egl, frame_texture);
+            if let Some((texture, ..)) = native_cursor_texture {
+                let _ = delete_gl_texture(&egl, texture);
+            }
             frame_idx += 1;
             next_deadline += frame_period;
             let now = Instant::now();
@@ -818,6 +887,9 @@ pub fn run_capture_session(
             ));
         }
         let _ = delete_gl_texture(&egl, frame_texture);
+        if let Some((texture, ..)) = native_cursor_texture {
+            let _ = delete_gl_texture(&egl, texture);
+        }
         frame_idx += 1;
 
         if dump_frames && frame_idx.is_multiple_of(dump_every as u64) {

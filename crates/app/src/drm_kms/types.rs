@@ -37,6 +37,7 @@ pub struct ProbeResult {
     pub fb_id: u32,
     pub fb_info: drm::control::framebuffer::PlanarInfo,
     pub plane_fds: Vec<Option<OwnedFd>>, // index matches fb_info planes
+    pub crtc_id: u32,
 }
 
 /// Represents a framebuffer exported as DMABuf fds, ready for encoding or preview. (not prime fds from drm api)
@@ -248,6 +249,7 @@ impl Display for OutputContainer {
 
 #[derive(Debug, Clone)]
 pub struct CaptureOptions {
+    pub privilege_mode: crate::drm_kms::privd::PrivilegeMode,
     pub card_path: String,
     pub connector: Option<String>,
     pub allow_fallback_connector: bool,
@@ -268,6 +270,7 @@ pub struct CaptureOptions {
     pub encoder_backend: EncoderBackend,
     pub video_codec: VideoCodec,
     pub cursor_composition: bool,
+    pub custom_cursor_composition: bool,
     pub hotkeys: Vec<HotkeyBinding>,
     pub keyboard_overlay: bool,
     pub keyboard_overlay_duration_ms: u64,
@@ -393,7 +396,7 @@ impl Default for LiveSettings {
             cursor_smear_max_squash: 0.15,
             cursor_sprite: None,
             cursor_sprite_version: 0,
-            cursor_scale: 50.0,
+            cursor_scale: 100.0,
             background: None,
             background_version: 0,
             background_enabled: false,
@@ -428,7 +431,7 @@ impl LiveSettings {
             // Seed from options so the first version matches the already-loaded texture.
             cursor_sprite: opts.cursor_sprite.clone(),
             cursor_sprite_version: 0,
-            cursor_scale: opts.cursor_scale.clamp(1.0, 100.0),
+            cursor_scale: opts.cursor_scale.clamp(1.0, 300.0),
             background: opts.background.clone(),
             background_version: 0,
             background_enabled: opts.background.is_some(),
