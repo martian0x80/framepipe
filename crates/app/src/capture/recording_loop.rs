@@ -45,6 +45,92 @@ fn replay_save_path(base: &std::path::Path, frame_idx: u64) -> PathBuf {
     base.with_file_name(name)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn cursor_state_with_effects(
+    texture: NativeTexture,
+    x: f32,
+    y: f32,
+    mut width: f32,
+    mut height: f32,
+    live: &LiveSettings,
+    output_w: i32,
+    output_h: i32,
+    smoother: &mut CursorSmoother,
+    last_update: &mut Instant,
+    last_sample: &mut Option<(f32, f32, Instant)>,
+) -> gpu_pipeline::CursorState {
+    let now = Instant::now();
+    let dt = (now - *last_update).as_secs_f32().clamp(0.0, 0.05);
+    *last_update = now;
+    let (x, y) = if live.cursor_smooth {
+        smoother.update(
+            x,
+            y,
+            dt,
+            live.cursor_spring_k,
+            live.cursor_spring_d,
+            live.cursor_max_speed,
+            live.cursor_snap_px,
+            live.cursor_smooth_ms,
+            live.cursor_deadzone_px,
+        )
+    } else {
+        (x, y)
+    };
+    let mut taps = vec![[x, y, 1.0]];
+    let mut dir_x = 1.0;
+    let mut dir_y = 0.0;
+    let mut stretch = 1.0;
+    let mut squash = 1.0;
+    if live.cursor_smear
+        && let Some((prev_x, prev_y, prev_t)) = *last_sample
+    {
+        let sample_dt = (now - prev_t).as_secs_f32().max(1e-4);
+        let vx = (x - prev_x) / sample_dt;
+        let vy = (y - prev_y) / sample_dt;
+        let speed = (vx * vx + vy * vy).sqrt();
+        if speed > live.cursor_smear_speed_threshold.max(0.0) {
+            dir_x = vx / speed;
+            dir_y = vy / speed;
+            let min_len = live.cursor_smear_min_len.max(0.0);
+            let max_len = live.cursor_smear_max_len.max(min_len);
+            let blur_len =
+                (speed * (1.0 / live.fps.max(1) as f32) * live.cursor_smear_shutter_scale.max(0.0))
+                    .clamp(min_len, max_len);
+            let tap_count = live.cursor_smear_taps.clamp(1, 8) as usize;
+            for i in 1..=tap_count {
+                let t = i as f32 / tap_count as f32;
+                let alpha = ((1.0 - t).powf(live.cursor_smear_alpha_exp.max(0.05))
+                    * live.cursor_smear_alpha_scale.clamp(0.0, 1.0))
+                .clamp(0.0, 1.0);
+                taps.push([x - dir_x * blur_len * t, y - dir_y * blur_len * t, alpha]);
+            }
+            let amount = ((speed - live.cursor_smear_stretch_threshold.max(0.0))
+                / live.cursor_smear_stretch_range.max(1.0))
+            .clamp(0.0, 1.0);
+            stretch = 1.0 + live.cursor_smear_max_stretch.max(0.0) * amount;
+            squash = 1.0 - live.cursor_smear_max_squash.clamp(0.0, 0.95) * amount;
+        }
+    }
+    *last_sample = Some((x, y, now));
+
+    if live.background_enabled && live.background_zoom < 100.0 {
+        let zoom = live.background_zoom.clamp(1.0, 100.0).div(100.0);
+        let off_x = output_w as f32 * (1.0 - zoom) * 0.5;
+        let off_y = output_h as f32 * (1.0 - zoom) * 0.5;
+        for tap in &mut taps {
+            tap[0] = tap[0] * zoom + off_x;
+            tap[1] = tap[1] * zoom + off_y;
+        }
+        width *= zoom;
+        height *= zoom;
+    }
+
+    gpu_pipeline::CursorState::with_blur_samples(
+        texture, width, height, taps, dir_x, dir_y, stretch, squash,
+    )
+}
+
 pub fn run_capture_session(
     options: CaptureOptions,
     control: CaptureControl,
@@ -578,20 +664,13 @@ pub fn run_capture_session(
         let native_cursor_texture = native_cursor.and_then(|cursor| {
             let x_scale = output_w as f32 / source_w as f32;
             let y_scale = output_h as f32 / source_h as f32;
-            let mut x = cursor.x as f32 * x_scale;
-            let mut y = cursor.y as f32 * y_scale;
+            let x = cursor.x as f32 * x_scale;
+            let y = cursor.y as f32 * y_scale;
             let mut width = cursor.width as f32 * x_scale;
             let mut height = cursor.height as f32 * y_scale;
             let cursor_scale = live.cursor_scale.clamp(1.0, 300.0).div(100.0);
             width *= cursor_scale;
             height *= cursor_scale;
-            if live.background_enabled && live.background_zoom < 100.0 {
-                let zoom = live.background_zoom.clamp(1.0, 100.0).div(100.0);
-                x = x * zoom + output_w as f32 * (1.0 - zoom) * 0.5;
-                y = y * zoom + output_h as f32 * (1.0 - zoom) * 0.5;
-                width *= zoom;
-                height *= zoom;
-            }
             let frame = CaptureFrame {
                 fb_id: cursor.fb_id,
                 width: cursor.buffer_width,
@@ -618,70 +697,18 @@ pub fn run_capture_session(
         });
 
         let cursor_state = if let Some((texture, x, y, width, height)) = native_cursor_texture {
-            let now = Instant::now();
-            let dt = (now - last_cursor_update).as_secs_f32().clamp(0.0, 0.05);
-            last_cursor_update = now;
-            let (x, y) = if live.cursor_smooth {
-                cursor_smoother.update(
-                    x,
-                    y,
-                    dt,
-                    live.cursor_spring_k,
-                    live.cursor_spring_d,
-                    live.cursor_max_speed,
-                    live.cursor_snap_px,
-                    live.cursor_smooth_ms,
-                    live.cursor_deadzone_px,
-                )
-            } else {
-                (x, y)
-            };
-            let mut taps = vec![[x, y, 1.0]];
-            let mut dir_x = 1.0;
-            let mut dir_y = 0.0;
-            let mut stretch = 1.0;
-            let mut squash = 1.0;
-            if live.cursor_smear
-                && let Some((prev_x, prev_y, prev_t)) = last_cursor_sample
-            {
-                let sample_dt = (now - prev_t).as_secs_f32().max(1e-4);
-                let vx = (x - prev_x) / sample_dt;
-                let vy = (y - prev_y) / sample_dt;
-                let speed = (vx * vx + vy * vy).sqrt();
-                if speed > live.cursor_smear_speed_threshold.max(0.0) {
-                    dir_x = vx / speed;
-                    dir_y = vy / speed;
-                    let min_len = live.cursor_smear_min_len.max(0.0);
-                    let max_len = live.cursor_smear_max_len.max(min_len);
-                    let blur_len = (speed
-                        * (1.0 / live.fps.max(1) as f32)
-                        * live.cursor_smear_shutter_scale.max(0.0))
-                    .clamp(min_len, max_len);
-                    let tap_count = live.cursor_smear_taps.clamp(1, 8) as usize;
-                    for i in 1..=tap_count {
-                        let t = i as f32 / tap_count as f32;
-                        let alpha = ((1.0 - t).powf(live.cursor_smear_alpha_exp.max(0.05))
-                            * live.cursor_smear_alpha_scale.clamp(0.0, 1.0))
-                        .clamp(0.0, 1.0);
-                        taps.push([x - dir_x * blur_len * t, y - dir_y * blur_len * t, alpha]);
-                    }
-                    let amount = ((speed - live.cursor_smear_stretch_threshold.max(0.0))
-                        / live.cursor_smear_stretch_range.max(1.0))
-                    .clamp(0.0, 1.0);
-                    stretch = 1.0 + live.cursor_smear_max_stretch.max(0.0) * amount;
-                    squash = 1.0 - live.cursor_smear_max_squash.clamp(0.0, 0.95) * amount;
-                }
-            }
-            last_cursor_sample = Some((x, y, now));
-            gpu_pipeline::CursorState::with_blur_samples(
+            cursor_state_with_effects(
                 NativeTexture(NonZero::new(texture).unwrap()),
+                x,
+                y,
                 width,
                 height,
-                taps,
-                dir_x,
-                dir_y,
-                stretch,
-                squash,
+                &live,
+                output_w,
+                output_h,
+                &mut cursor_smoother,
+                &mut last_cursor_update,
+                &mut last_cursor_sample,
             )
         } else if let (Some(ring), Some(ctex)) = (mouse_ring.as_ref(), cursor_tex.as_ref()) {
             if let Some(event) = ring.latest_before(u64::MAX) {
@@ -715,91 +742,18 @@ pub fn run_capture_session(
                 let max_y = (output_h as f32 - 1.0).max(min_y);
                 let cursor_x = (mx - hotspot_x).clamp(min_x, max_x);
                 let cursor_y = (my - hotspot_y).clamp(min_y, max_y);
-                let now = Instant::now();
-                let dt = (now - last_cursor_update).as_secs_f32().clamp(0.0, 0.05);
-                last_cursor_update = now;
-                let (s_cursor_x, s_cursor_y) = if live.cursor_smooth {
-                    cursor_smoother.update(
-                        cursor_x,
-                        cursor_y,
-                        dt,
-                        live.cursor_spring_k,
-                        live.cursor_spring_d,
-                        live.cursor_max_speed,
-                        live.cursor_snap_px,
-                        live.cursor_smooth_ms,
-                        live.cursor_deadzone_px,
-                    )
-                } else {
-                    (cursor_x, cursor_y)
-                };
-                let mut taps: Vec<[f32; 3]> = Vec::with_capacity(8);
-                taps.push([s_cursor_x, s_cursor_y, 1.0]);
-                let mut motion_dir_x = 1.0f32;
-                let mut motion_dir_y = 0.0f32;
-                let mut motion_stretch = 1.0f32;
-                let mut motion_squash = 1.0f32;
-
-                if live.cursor_smear
-                    && let Some((prev_x, prev_y, prev_t)) = last_cursor_sample
-                {
-                    let vdt = (now - prev_t).as_secs_f32().max(1e-4);
-                    let vx = (s_cursor_x - prev_x) / vdt;
-                    let vy = (s_cursor_y - prev_y) / vdt;
-                    let speed = (vx * vx + vy * vy).sqrt();
-                    if speed > live.cursor_smear_speed_threshold.max(0.0) {
-                        let shutter_seconds = (1.0 / live.fps.max(1) as f32)
-                            * live.cursor_smear_shutter_scale.max(0.0);
-                        let min_len = live.cursor_smear_min_len.max(0.0);
-                        let max_len = live.cursor_smear_max_len.max(min_len);
-                        let blur_len = (speed * shutter_seconds).clamp(min_len, max_len);
-                        motion_dir_x = vx / speed;
-                        motion_dir_y = vy / speed;
-                        let extra_taps = live.cursor_smear_taps.clamp(1, 8) as usize;
-                        let alpha_exp = live.cursor_smear_alpha_exp.max(0.05);
-                        let alpha_scale = live.cursor_smear_alpha_scale.clamp(0.0, 1.0);
-                        for i in 1..=extra_taps {
-                            let t = i as f32 / extra_taps as f32;
-                            let alpha = ((1.0 - t).powf(alpha_exp) * alpha_scale).clamp(0.0, 1.0);
-                            taps.push([
-                                s_cursor_x - motion_dir_x * blur_len * t,
-                                s_cursor_y - motion_dir_y * blur_len * t,
-                                alpha,
-                            ]);
-                        }
-
-                        // Stretch cursor shape along motion axis.
-                        let stretch_threshold = live.cursor_smear_stretch_threshold.max(0.0);
-                        let stretch_range = live.cursor_smear_stretch_range.max(1.0);
-                        let s = ((speed - stretch_threshold) / stretch_range).clamp(0.0, 1.0);
-                        motion_stretch = 1.0 + live.cursor_smear_max_stretch.max(0.0) * s;
-                        motion_squash = 1.0 - live.cursor_smear_max_squash.clamp(0.0, 0.95) * s;
-                    }
-                }
-                last_cursor_sample = Some((s_cursor_x, s_cursor_y, now));
-
-                // Apply background-zoom transform to all tap coordinates so the
-                // cursor tracks the shrunken frame rather than the full output.
-                let taps = if live.background_enabled && live.background_zoom < 100.0 {
-                    let zoom = live.background_zoom.clamp(1.0, 100.0).div(100.0);
-                    let off_x = output_w as f32 * (1.0 - zoom) * 0.5;
-                    let off_y = output_h as f32 * (1.0 - zoom) * 0.5;
-                    taps.into_iter()
-                        .map(|[x, y, a]| [x * zoom + off_x, y * zoom + off_y, a])
-                        .collect()
-                } else {
-                    taps
-                };
-
-                gpu_pipeline::CursorState::with_blur_samples(
+                cursor_state_with_effects(
                     *ctex,
+                    cursor_x,
+                    cursor_y,
                     cursor_w,
                     cursor_h,
-                    taps,
-                    motion_dir_x,
-                    motion_dir_y,
-                    motion_stretch,
-                    motion_squash,
+                    &live,
+                    output_w,
+                    output_h,
+                    &mut cursor_smoother,
+                    &mut last_cursor_update,
+                    &mut last_cursor_sample,
                 )
             } else {
                 cursor_state_empty.clone()
