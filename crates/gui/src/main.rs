@@ -6,6 +6,10 @@ mod theme;
 use app::App;
 use iced::window::icon;
 
+fn title(_: &App) -> String {
+    format!("Framepipe v{}", env!("CARGO_PKG_VERSION"))
+}
+
 fn main() -> iced::Result {
     let icon = image::load_from_memory_with_format(
         include_bytes!("../../../assets/icons/icon-512.png"),
@@ -29,7 +33,7 @@ fn main() -> iced::Result {
             ..Default::default()
         })
         .theme(App::theme)
-        .title("Framepipe")
+        .title(title)
         .subscription(App::subscription)
         .run()
 }

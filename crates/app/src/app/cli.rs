@@ -10,7 +10,7 @@ use crate::drm_kms::types::{
 };
 
 #[derive(Parser, Debug)]
-#[command(name = "framepipe")]
+#[command(name = "framepipe", version)]
 #[command(about = "GPU Screen Recorder", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]

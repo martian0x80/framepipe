@@ -3,5 +3,6 @@ use eyre::Result;
 
 fn main() -> Result<()> {
     framepipe::init_logging("debug");
+    log::info!("Framepipe v{}", env!("CARGO_PKG_VERSION"));
     framepipe::run_cli(framepipe::app::cli::Cli::parse())
 }

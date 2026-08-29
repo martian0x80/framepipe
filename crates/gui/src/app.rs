@@ -163,6 +163,7 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         framepipe::init_logging("info");
+        log::info!("Framepipe GUI v{}", env!("CARGO_PKG_VERSION"));
         let signal_control =
             framepipe::app::signals::CaptureControl::register().unwrap_or_else(|e| {
                 log::warn!("failed to register capture control signals in GUI: {e}");
