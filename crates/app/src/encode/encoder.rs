@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Instant;
 
 use gstreamer::prelude::*;
@@ -52,6 +51,31 @@ pub struct GstEncoder {
     last_pts_ns: Option<u64>,
     last_push_wall: Option<Instant>,
     replay: Option<Arc<Mutex<ReplayBuffer>>>,
+    failure: Arc<PipelineFailure>,
+}
+
+#[derive(Default)]
+struct PipelineFailure {
+    message: Mutex<Option<String>>,
+}
+
+impl PipelineFailure {
+    fn record(&self, message: String) {
+        match self.message.lock() {
+            Ok(mut slot) if slot.is_none() => *slot = Some(message),
+            Ok(_) => {}
+            Err(e) => log::error!("pipeline failure lock poisoned: {e}"),
+        }
+    }
+
+    fn check(&self) -> Result<(), EncodeError> {
+        let failure = self
+            .message
+            .lock()
+            .map_err(|e| EncodeError::Bus(format!("pipeline failure lock poisoned: {e}")))?
+            .clone();
+        failure.map_or(Ok(()), |message| Err(EncodeError::Bus(message)))
+    }
 }
 
 pub enum EncoderOutput<'a> {
@@ -261,6 +285,22 @@ fn encoder_factory_name(backend: &EncoderBackend, codec: &VideoCodec) -> &'stati
     }
 }
 
+fn require_gst_elements(elements: &[&str]) -> Result<(), EncodeError> {
+    let missing: Vec<_> = elements
+        .iter()
+        .filter(|name| gst::ElementFactory::find(**name).is_none())
+        .copied()
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(EncodeError::Bus(format!(
+            "missing GStreamer OpenGL element(s): {}; install your distribution's GStreamer OpenGL plugin package",
+            missing.join(", ")
+        )))
+    }
+}
+
 fn h264_profile_from_quality(quality: &QualityPreset) -> &'static str {
     match quality {
         QualityPreset::Low => "constrained-baseline",
@@ -379,12 +419,13 @@ fn set_appsrc_caps(
         .map(|tf| format!(",transfer-function=(string){tf}"))
         .unwrap_or_default();
 
-    // Some drivers expose DMA_DRM AB24 only for specific non-linear modifiers.
-    // If exporter gives linear modifier (0), prefer plain raw caps for compatibility.
+    // Modifier 0 is linear, so no layout information is lost by using raw caps.
+    // This keeps linear KMS exports usable on GL stacks that cannot import
+    // DMA_DRM directly; non-linear buffers always retain their DRM modifier.
     if ex.modifier == 0
         && let Some(raw) = raw
     {
-        let raw_fallback = format!(
+        let linear_raw = format!(
             "video/x-raw,format=(string){},width=(int){},height=(int){},framerate=(fraction){},color-range=(string){},colorimetry=(string){}{}",
             raw,
             ex.width,
@@ -394,11 +435,11 @@ fn set_appsrc_caps(
             colorimetry.as_str(),
             transfer_suffix.as_str()
         );
-        if let Ok(caps) = gst::Caps::from_str(&raw_fallback) {
-            log::debug!("Using appsrc caps (linear modifier fallback): {raw_fallback}");
-            appsrc.set_caps(Some(&caps));
-            return Ok(());
-        }
+        let caps = gst::Caps::from_str(&linear_raw)
+            .map_err(|e| format!("linear raw caps parse failed: {e}"))?;
+        log::debug!("Using appsrc caps (linear modifier fallback): {linear_raw}");
+        appsrc.set_caps(Some(&caps));
+        return Ok(());
     }
 
     if let Some(drm) = drm {
@@ -420,30 +461,16 @@ fn set_appsrc_caps(
                 return Ok(());
             }
             Err(e) => {
-                log::warn!("DMA_DRM+modifier caps parse failed: {e}");
+                return Err(format!("DMA_DRM+modifier caps parse failed: {e}"));
             }
         }
+    }
 
-        let full = format!(
-            "video/x-raw(memory:DMABuf),format=(string)DMA_DRM,drm-format=(string){},width=(int){},height=(int){},framerate=(fraction){},color-range=(string){},colorimetry=(string){}{}",
-            drm,
-            ex.width,
-            ex.height,
-            fps_fraction,
-            range,
-            colorimetry.as_str(),
-            transfer_suffix.as_str()
-        );
-        match gst::Caps::from_str(&full) {
-            Ok(caps) => {
-                log::debug!("Using appsrc caps: {full}");
-                appsrc.set_caps(Some(&caps));
-                return Ok(());
-            }
-            Err(e) => {
-                log::warn!("DMA_DRM caps parse failed: {e}");
-            }
-        }
+    if ex.modifier != 0 {
+        return Err(format!(
+            "unsupported DRM fourcc=0x{:08x} with modifier=0x{:016x}",
+            ex.fourcc, ex.modifier
+        ));
     }
 
     if let Some(raw) = raw {
@@ -772,6 +799,12 @@ impl GstEncoder {
         mut options: EncoderOptions,
     ) -> Result<Self, EncodeError> {
         gst::init()?;
+        if options.encoder_backend == EncoderBackend::Cpu {
+            require_gst_elements(&["glupload", "glcolorconvert", "gldownload"])?;
+        }
+        if matches!(&output, EncoderOutput::Preview) {
+            require_gst_elements(&["glupload", "glcolorconvert", "glimagesink"])?;
+        }
         if options.encoder_backend == EncoderBackend::Vulkan {
             return Err(EncodeError::Bus(
                 "vulkan encoder backend is temporarily disabled".to_string(),
@@ -1089,6 +1122,13 @@ impl GstEncoder {
             EncoderBackend::Cpu => {
                 let rc = cpu_rate_control(&options.bitrate_mode)?;
                 let enc = cpu_encoder_name(&options.video_codec);
+                let gl_import = concat!(
+                    "! glupload ",
+                    "! glcolorconvert ",
+                    "! video/x-raw(memory:GLMemory),format=RGBA ",
+                    "! gldownload ",
+                    "! video/x-raw,format=RGBA "
+                );
                 log::debug!(
                     "Only x264enc supports rate-control among CPU encoders, mapping requested {:?} to rate-control={rc}",
                     options.bitrate_mode
@@ -1096,6 +1136,7 @@ impl GstEncoder {
                 match options.video_codec {
                     VideoCodec::H264 => format!(
                         concat!(
+                            "{gl_import}",
                             "! videoconvert ",
                             "{videorate}",
                             "! video/x-raw,format=NV12,width={w},height={h},framerate={fps_fraction},color-range=(string){range},colorimetry=(string){colorimetry} ",
@@ -1104,6 +1145,7 @@ impl GstEncoder {
                         ),
                         w = w,
                         h = h,
+                        gl_import = gl_import,
                         fps_fraction = fps_fraction,
                         videorate = videorate,
                         range = options.color_range.to_string(),
@@ -1115,6 +1157,7 @@ impl GstEncoder {
                     ),
                     VideoCodec::H265 => format!(
                         concat!(
+                            "{gl_import}",
                             "! videoconvert ",
                             "{videorate}",
                             "! video/x-raw,format=NV12,width={w},height={h},framerate={fps_fraction},color-range=(string){range},colorimetry=(string){colorimetry} ",
@@ -1123,6 +1166,7 @@ impl GstEncoder {
                         ),
                         w = w,
                         h = h,
+                        gl_import = gl_import,
                         fps_fraction = fps_fraction,
                         videorate = videorate,
                         range = options.color_range.to_string(),
@@ -1133,6 +1177,7 @@ impl GstEncoder {
                     ),
                     VideoCodec::Av1 => format!(
                         concat!(
+                            "{gl_import}",
                             "! videoconvert ",
                             "{videorate}",
                             "! video/x-raw,format=NV12,width={w},height={h},framerate={fps_fraction},color-range=(string){range},colorimetry=(string){colorimetry} ",
@@ -1141,6 +1186,7 @@ impl GstEncoder {
                         ),
                         w = w,
                         h = h,
+                        gl_import = gl_import,
                         fps_fraction = fps_fraction,
                         videorate = videorate,
                         range = options.color_range.to_string(),
@@ -1193,10 +1239,82 @@ impl GstEncoder {
         };
         log::debug!("GStreamer pipeline: {desc}");
 
-        let element = gst::parse::launch(&desc)?;
+        let replay_seconds = match output {
+            EncoderOutput::ReplayBuffer { seconds } => Some(seconds),
+            EncoderOutput::File(_) | EncoderOutput::Preview => None,
+        };
+        Self::start_pipeline(&desc, ex, options, ring_slots, replay_seconds)
+    }
+
+    fn start_pipeline(
+        desc: &str,
+        ex: &ExportedDmabuf,
+        options: EncoderOptions,
+        ring_slots: u64,
+        replay_seconds: Option<u32>,
+    ) -> Result<Self, EncodeError> {
+        let fps = options.fps.max(1);
+
+        let element = gst::parse::launch(desc).map_err(|e| {
+            let detail = e.to_string();
+            let hint = if detail.contains("no element") || detail.contains("no plugin") {
+                "; install the GStreamer plugin package that provides the missing element"
+            } else {
+                ""
+            };
+            EncodeError::Bus(format!(
+                "failed to parse GStreamer pipeline: {detail}{hint}"
+            ))
+        })?;
         let pipeline = element
             .downcast::<gst::Pipeline>()
             .map_err(|_| glib::bool_error!("parsed element is not a pipeline"))?;
+
+        let failure = Arc::new(PipelineFailure::default());
+        let bus = pipeline
+            .bus()
+            .ok_or_else(|| EncodeError::Bus("pipeline has no bus".to_string()))?;
+        let failure_for_bus = Arc::clone(&failure);
+        bus.set_sync_handler(move |_, message| {
+            let source = message
+                .src()
+                .map(|source| source.name().to_string())
+                .unwrap_or_else(|| "unknown source".to_string());
+            match message.view() {
+                gst::MessageView::Error(error) => {
+                    let details = error
+                        .debug()
+                        .map(|details| details.to_string())
+                        .unwrap_or_else(|| "no debug details".to_string());
+                    let failure_message = format!(
+                        "GStreamer error from {source}: {} ({details}); verify the required GStreamer plugins and drivers are installed",
+                        error.error()
+                    );
+                    log::error!("{failure_message}");
+                    failure_for_bus.record(failure_message);
+                }
+                gst::MessageView::Warning(warning) => {
+                    log::warn!(
+                        "GStreamer warning from {source}: {} ({})",
+                        warning.error(),
+                        warning
+                            .debug()
+                            .map(|details| details.to_string())
+                            .unwrap_or_else(|| "no debug details".to_string())
+                    );
+                }
+                gst::MessageView::StateChanged(state) => {
+                    log::debug!(
+                        "GStreamer state change from {source}: {:?} -> {:?} (pending {:?})",
+                        state.old(),
+                        state.current(),
+                        state.pending()
+                    );
+                }
+                _ => {}
+            }
+            gst::BusSyncReply::Pass
+        });
 
         let appsrc = pipeline
             .by_name("src")
@@ -1215,7 +1333,7 @@ impl GstEncoder {
         appsrc.set_do_timestamp(false);
         appsrc.set_format(gst::Format::Time);
 
-        let replay = if let EncoderOutput::ReplayBuffer { seconds } = output {
+        let replay = if let Some(seconds) = replay_seconds {
             let appsink = pipeline
                 .by_name("replay_sink")
                 .ok_or(EncodeError::MissingAppSink)?
@@ -1248,12 +1366,12 @@ impl GstEncoder {
             None
         };
 
-        pipeline
-            .set_state(gst::State::Playing)
-            .map_err(|e| EncodeError::Bus(format!("failed to set Playing: {e:?}")))?;
-
-        // wait short time for cap negotiation
-        thread::sleep(std::time::Duration::from_millis(100));
+        if let Err(e) = pipeline.set_state(gst::State::Playing) {
+            let message = format!("failed to set Playing: {e:?}");
+            log::error!("{message}");
+            return Err(EncodeError::Bus(message));
+        }
+        failure.check()?;
 
         if let Some(enc) = pipeline.by_name("enc") {
             let rate = enc
@@ -1269,7 +1387,10 @@ impl GstEncoder {
             );
             if let Some(sink_pad) = enc.static_pad("sink") {
                 let caps = sink_pad.current_caps();
-                log::info!("Encoder sink negotiated caps: {:?}", caps);
+                log::info!(
+                    "Encoder sink caps before the first frame is pushed: {:?}",
+                    caps
+                );
             }
         }
 
@@ -1286,6 +1407,7 @@ impl GstEncoder {
             last_pts_ns: None,
             last_push_wall: None,
             replay,
+            failure,
         })
     }
 
@@ -1308,6 +1430,7 @@ impl GstEncoder {
     }
 
     pub fn push_frame(&mut self, ex: &ExportedDmabuf) -> Result<(), EncodeError> {
+        self.failure.check()?;
         if self.paused {
             return Ok(());
         }
@@ -1353,8 +1476,20 @@ impl GstEncoder {
             log::trace!("push_frame pts={}ms first", pts_ns / 1_000_000);
         }
 
+        let first_frame = self.last_pts_ns.is_none();
         push_exported_dmabuf(&self.appsrc, ex, pts_ns, duration)?;
+        self.failure.check()?;
         self.last_pts_ns = Some(pts_ns);
+
+        if first_frame
+            && let Some(enc) = self.pipeline.by_name("enc")
+            && let Some(sink_pad) = enc.static_pad("sink")
+        {
+            log::info!(
+                "Encoder sink caps after the first frame was pushed: {:?}",
+                sink_pad.current_caps()
+            );
+        }
 
         Ok(())
     }
@@ -1402,6 +1537,7 @@ impl GstEncoder {
     }
 
     pub fn finish(self) -> Result<(), EncodeError> {
+        self.failure.check()?;
         self.appsrc
             .end_of_stream()
             .map_err(|e| EncodeError::Bus(format!("eos failed: {e:?}")))?;

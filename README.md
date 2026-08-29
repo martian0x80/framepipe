@@ -40,6 +40,7 @@ Two capture backends are available: DRM/KMS and XDG Portal (PipeWire). DRM/KMS i
 ## Notes
 
 - Using H.264 with VAAPI encoder backend may introduce some artifacts and there is no fix for that so far. Use QSV or use H265 or av1 codecs.
+- CLI preview and CPU encoding use GStreamer's OpenGL elements (`glupload`, `glcolorconvert`, and, for CPU encoding, `gldownload`) to import non-linear GPU DMABufs safely. Ensure the GStreamer OpenGL plugin set is installed.
 
 ## Quick Start
 
